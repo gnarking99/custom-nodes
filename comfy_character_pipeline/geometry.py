@@ -11,6 +11,7 @@ SPATIAL = {
     "ltx-2.3 (x64)": 64,
     "wan-2.2 (x16)": 16,
     "sdxl (x8)": 8,
+    "custom": 0,
 }
 # regla temporal: n_frames = step*k + 1
 TEMPORAL = {
@@ -18,6 +19,8 @@ TEMPORAL = {
     "wan-2.2 (4n+1)": 4,
     "ninguna": 1,
 }
+
+MAX_SIDE = 16384
 
 
 def _snap(v, mult):
@@ -52,29 +55,53 @@ class SnapResolution(io.ComfyNode):
                     options=["lanczos", "bicubic", "bilinear", "area", "nearest-exact"],
                     default="lanczos",
                 ),
+                io.Int.Input(
+                    "custom_multiple", default=32, min=1, max=256,
+                    tooltip="Solo se usa si model_family = custom.",
+                ),
             ],
             outputs=[
                 io.Image.Output(display_name="image"),
                 io.Int.Output(display_name="width"),
                 io.Int.Output(display_name="height"),
+                io.Float.Output(display_name="megapixels_out"),
             ],
         )
 
     @classmethod
-    def execute(cls, image, model_family, megapixels, upscale_method) -> io.NodeOutput:
-        mult = SPATIAL[model_family]
+    def execute(cls, image, model_family, megapixels, upscale_method, custom_multiple) -> io.NodeOutput:
+        if image is None or image.numel() == 0:
+            raise ValueError("[SnapResolution] La imagen de entrada esta vacia.")
+        if image.dim() != 4:
+            raise ValueError(
+                f"[SnapResolution] Se esperaba un tensor [B,H,W,C] y llego {tuple(image.shape)}."
+            )
+
+        mult = SPATIAL[model_family] or int(custom_multiple)
         _, h, w, _ = image.shape
+        if w <= 0 or h <= 0:
+            raise ValueError(f"[SnapResolution] Dimensiones invalidas: {w}x{h}.")
 
+        fw, fh = float(w), float(h)
         if megapixels > 0:
-            scale = math.sqrt((megapixels * 1_000_000.0) / (w * h))
-            w, h = w * scale, h * scale
+            scale = math.sqrt((megapixels * 1_000_000.0) / (fw * fh))
+            fw, fh = fw * scale, fh * scale
 
-        tw, th = _snap(w, mult), _snap(h, mult)
+        tw, th = _snap(fw, mult), _snap(fh, mult)
+
+        if tw > MAX_SIDE or th > MAX_SIDE:
+            raise ValueError(
+                f"[SnapResolution] El resultado seria {tw}x{th}, por encima del limite "
+                f"de {MAX_SIDE}px por lado. Baja `megapixels`."
+            )
+
+        if (tw, th) == (w, h):
+            return io.NodeOutput(image, tw, th, round(tw * th / 1_000_000.0, 4))
 
         samples = image.movedim(-1, 1)
         samples = comfy.utils.common_upscale(samples, tw, th, upscale_method, "disabled")
         out = samples.movedim(1, -1)
-        return io.NodeOutput(out, tw, th)
+        return io.NodeOutput(out, tw, th, round(tw * th / 1_000_000.0, 4))
 
 
 class VideoChunk(io.ComfyNode):
@@ -106,30 +133,62 @@ class VideoChunk(io.ComfyNode):
                              tooltip="Longitud deseada. Se redondea hacia abajo a la regla del modelo."),
                 io.Int.Input("overlap", default=8, min=0, max=256,
                              tooltip="Frames compartidos con el trozo anterior. Evita el salto en la costura."),
+                io.Combo.Input(
+                    "out_of_range", options=["error", "clamp"], default="error",
+                    tooltip=(
+                        "Que hacer si chunk_index supera el ultimo trozo. "
+                        "error: te avisa de que has terminado el clip. "
+                        "clamp: devuelve el ultimo trozo valido."
+                    ),
+                ),
             ],
             outputs=[
                 io.Image.Output(display_name="images"),
                 io.Int.Output(display_name="length"),
                 io.Int.Output(display_name="total_chunks"),
                 io.Int.Output(display_name="start_index"),
+                io.Boolean.Output(display_name="is_last"),
             ],
         )
 
     @classmethod
-    def execute(cls, images, model_family, chunk_index, chunk_length, overlap) -> io.NodeOutput:
+    def execute(cls, images, model_family, chunk_index, chunk_length, overlap, out_of_range) -> io.NodeOutput:
+        if images is None or images.shape[0] == 0:
+            raise ValueError("[VideoChunk] El lote de frames llega vacio.")
+
         step = TEMPORAL[model_family]
         total = int(images.shape[0])
 
         def valid(n):
             if step <= 1:
-                return max(1, n)
+                return max(1, int(n))
             if n < 1:
                 return 1
-            return max(1, ((n - 1) // step) * step + 1)
+            return max(1, ((int(n) - 1) // step) * step + 1)
 
         want = valid(chunk_length)
-        stride = max(1, want - overlap)
-        total_chunks = max(1, math.ceil(max(0, total - overlap) / stride))
+
+        if overlap >= want:
+            raise ValueError(
+                f"[VideoChunk] `overlap` ({overlap}) debe ser menor que la longitud del trozo "
+                f"({want}). Con solape >= longitud el troceo no avanza nunca."
+            )
+
+        stride = want - overlap
+        if total <= want:
+            total_chunks = 1
+        else:
+            total_chunks = 1 + math.ceil((total - want) / stride)
+
+        if chunk_index >= total_chunks:
+            if out_of_range == "error":
+                raise ValueError(
+                    f"[VideoChunk] chunk_index={chunk_index} pero solo hay {total_chunks} trozo(s) "
+                    f"para {total} frames con longitud {want} y solape {overlap}.\n"
+                    "  Has terminado de recorrer el clip. Pon out_of_range=clamp si prefieres "
+                    "que repita el ultimo trozo en vez de avisarte."
+                )
+            chunk_index = total_chunks - 1
 
         start = min(chunk_index * stride, max(0, total - 1))
         piece = images[start:start + want]
@@ -140,4 +199,6 @@ class VideoChunk(io.ComfyNode):
             raise ValueError(
                 f"[VideoChunk] Inconsistencia interna: {piece.shape[0]} frames vs longitud {length}."
             )
-        return io.NodeOutput(piece, length, total_chunks, start)
+
+        is_last = (chunk_index >= total_chunks - 1)
+        return io.NodeOutput(piece, length, total_chunks, start, is_last)

@@ -67,37 +67,75 @@ class CharacterProfile(io.ComfyNode):
                 io.String.Output(display_name="canon_prompt"),
                 io.String.Output(display_name="canon_negative"),
                 io.String.Output(display_name="identity_lock"),
+                io.String.Output(display_name="profile_name"),
             ],
         )
 
     @classmethod
     def execute(cls, profile) -> io.NodeOutput:
+        if not profile or profile.startswith("<"):
+            raise ValueError(
+                f"[CharacterProfile] No hay ningun perfil disponible.\n"
+                f"  Carpeta esperada: {PROFILES_DIR}\n"
+                f"  Crea ahi un JSON (por ejemplo `mipersonaje.json`) y reinicia ComfyUI.\n"
+                f"  En instalaciones en la nube, comprueba que el repo se haya clonado "
+                f"entero y no solo los archivos .py."
+            )
+
         path = os.path.join(PROFILES_DIR, profile)
         if not os.path.isfile(path):
             raise ValueError(
                 f"[CharacterProfile] No encuentro el perfil '{profile}'.\n"
                 f"  Buscando en: {PROFILES_DIR}\n"
-                f"  Crea un JSON ahi y reinicia ComfyUI."
+                f"  Si lo acabas de crear, reinicia ComfyUI: la lista se lee al arrancar."
             )
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"[CharacterProfile] El perfil '{profile}' no es JSON valido.\n"
+                f"  {exc}\n"
+                f"  Suele ser una coma de mas al final o comillas tipograficas."
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"[CharacterProfile] El perfil '{profile}' debe ser un objeto JSON "
+                f"(llaves), no {type(data).__name__}."
+            )
+
+        unknown = [k for k in data if k not in DEFAULTS]
+        if unknown:
+            print(f"[CharacterProfile] Aviso: claves ignoradas en '{profile}': {', '.join(unknown)}")
 
         cfg = dict(DEFAULTS)
         cfg.update(data)
 
-        missing = [k for k in ("trigger", "lora_name") if not cfg[k]]
+        missing = [k for k in ("trigger", "lora_name") if not str(cfg[k]).strip()]
         if missing:
             raise ValueError(
                 f"[CharacterProfile] El perfil '{profile}' no define: {', '.join(missing)}."
             )
 
+        def _num(key, cast):
+            try:
+                return cast(cfg[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"[CharacterProfile] '{key}' del perfil '{profile}' no es un numero "
+                    f"valido (valor: {cfg[key]!r})."
+                ) from exc
+
         return io.NodeOutput(
             str(cfg["trigger"]),
             str(cfg["lora_name"]),
-            float(cfg["strength_edit"]),
-            float(cfg["strength_refine"]),
-            int(cfg["canon_seed"]),
+            _num("strength_edit", float),
+            _num("strength_refine", float),
+            _num("canon_seed", int),
             str(cfg["canon_prompt"]),
             str(cfg["canon_negative"]),
             str(cfg["identity_lock"]),
+            os.path.splitext(profile)[0],
         )

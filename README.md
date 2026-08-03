@@ -117,6 +117,18 @@ profiles/
 
 ---
 
+## Pruebas
+
+```bash
+python tests/test_logic.py
+```
+
+Prueba la lógica pura de `PromptTemplate`, `VideoChunk` y `SnapResolution` **sin necesitar ComfyUI** (stubbea `comfy_api`). 19 comprobaciones. Úsalo antes de cada push.
+
+Para probar los 8 nodos dentro de ComfyUI, carga `example_workflows/lab_all_nodes.json`: no requiere ningún modelo.
+
+---
+
 ## Antes de fiarte: tres cosas que verificar en el primer arranque
 
 Este pack está escrito contra la API V3 documentada, pero **no se ha ejecutado dentro de ComfyUI todavía**. Tres puntos concretos a comprobar y corregir si hace falta:
