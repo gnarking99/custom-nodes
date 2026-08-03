@@ -1,0 +1,11 @@
+{
+  "trigger": "clayantboss",
+  "lora_name": "Clayant_V01_000001900.safetensors",
+  "strength_edit": 0.85,
+  "strength_refine": 0.25,
+  "canon_seed": 1234567890,
+  "canon_prompt": "character model sheet, full body, standing straight facing the camera, neutral A-pose with both arms slightly away from the body, both hands fully visible with fingers spread apart, neutral relaxed expression, plain flat light grey background, even soft studio lighting, no props, sharp focus, 3D animated feature film character render",
+  "canon_negative": "",
+  "identity_lock": "Keep the character identity, pose, facial expression, camera angle and composition exactly as in the reference image. Change nothing else.",
+  "notes": "Personaje hormiga. LoRA entrenado sobre Flux.2 Klein 9B. Para LTX-2.3 y Wan 2.2 hay que reentrenar: los LoRA no cruzan de arquitectura."
+}
