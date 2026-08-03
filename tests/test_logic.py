@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Prueba la logica pura de los nodos sin necesitar ComfyUI.
 Importa los modulos reales stubbeando comfy_api para que se puedan cargar."""
 import os

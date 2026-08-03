@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Prueba la deteccion de trigger contra un .safetensors sintetico real."""
 import json
 import os
