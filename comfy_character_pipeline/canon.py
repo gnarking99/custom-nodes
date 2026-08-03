@@ -174,4 +174,5 @@ class PromptTemplate(io.ComfyNode):
 
         out = " ".join(out.split())
         out = out.replace(" ,", ",").replace(",,", ",").replace(" .", ".").replace("..", ".")
-        return io.NodeOutput(out.strip(" ,."), has_changes)
+        # quita separadores huerfanos en los extremos, pero respeta el punto final
+        return io.NodeOutput(out.strip().strip(",").strip(), has_changes)
