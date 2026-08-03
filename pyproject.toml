@@ -1,4 +1,4 @@
-[project]
+﻿[project]
 name = "comfyui-character-pipeline"
 description = "Nodos para flujos de recuperacion de detalle de personajes con LoRA (Flux.2 Klein / LTX-2.3 / Wan 2.2)."
 version = "0.1.0"
@@ -12,3 +12,4 @@ Repository = "https://github.com/gnarking99/custom-nodes"
 [tool.comfy]
 PublisherId = "gnarking99"
 DisplayName = "Character Pipeline"
+

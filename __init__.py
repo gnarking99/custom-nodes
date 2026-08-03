@@ -12,14 +12,25 @@ from .comfy_character_pipeline.geometry import SnapResolution, VideoChunk
 from .comfy_character_pipeline.sampling import SigmasDenoise
 from .comfy_character_pipeline.profile import CharacterProfile
 from .comfy_character_pipeline.canon import CanonPanelBuilder, PromptTemplate
+from .comfy_character_pipeline.lora_meta import LoraTriggerReader
+from .comfy_character_pipeline.artist import QualityPreset, PipelineStatus
 
 NODES = [
+    # artista
+    QualityPreset,
+    PipelineStatus,
+    # organizacion
+    LoraTriggerReader,
     CharacterProfile,
+    # guardas
     MaskGuard,
     BatchMatch,
+    # geometria
     SnapResolution,
     VideoChunk,
+    # muestreo
     SigmasDenoise,
+    # canon
     CanonPanelBuilder,
     PromptTemplate,
 ]

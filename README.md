@@ -18,6 +18,31 @@ Los tres flujos comparten los mismos tres problemas:
 
 ## Los nodos
 
+### `LoRA Trigger Reader` — organización
+Saca la trigger word **del propio archivo del LoRA**. Sin preguntarle a nadie.
+
+**El problema:** cada vez que llega un LoRA nuevo hay que escribirle a quien lo entrenó para preguntarle la palabra de disparo.
+
+**Y esa información ya está dentro del archivo.** Un `.safetensors` empieza por 8 bytes con el tamaño de la cabecera, seguidos de un JSON con `__metadata__`. El nodo lee **solo esa cabecera** — no carga los pesos, así que tarda milisegundos aunque el LoRA pese 2 GB.
+
+Busca por orden, y siempre dice **de dónde lo sacó**:
+
+1. Claves explícitas: `modelspec.trigger_phrase`, `ss_activation_tags`, `ss_trigger_words`
+2. `ss_tag_frequency` — el histograma de etiquetas del dataset. Un trigger aparece en prácticamente **todas** las imágenes; las demás etiquetas describen imágenes sueltas. La que roza el 100% es el trigger. Descarta stopwords (`1girl`, `masterpiece`…)
+3. El nombre del archivo, como último recurso — y avisa de que es una suposición
+
+**Bonus que evita un fallo caro:** detecta la arquitectura (`flux` / `ltx` / `wan` / `sdxl`…) y puede **detener la ejecución si no coincide** con la que esperas. Cargar un LoRA de Flux sobre LTX no da error: simplemente no aplica ninguna clave y te vuelves loco buscando por qué "no se nota".
+
+> Existen nodos que hacen algo parecido ([Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words), [Lora-Manager](https://github.com/willmiao/ComfyUI-Lora-Manager)), pero tiran sobre todo de la **API de Civitai**. Para LoRAs entrenados en casa eso no sirve: este solo mira el archivo.
+
+### `Quality Preset` — artista
+Un desplegable en vez de seis números sueltos: **Borrador / Normal / Máximo / Solo limpiar**, por flujo (Flux, LTX, Wan).
+
+Tus artistas no tienen por qué saber que `steps 14 × denoise 0.42` da 6 pasos reales, ni que Wan quiere 0.15-0.25 mientras Flux aguanta 0.42. La salida `resumen` está escrita para leerse en un `PreviewAny` y avisa si el ajuste los mete en zona peligrosa.
+
+### `Pipeline Status` — artista
+Un semáforo en castellano en vez de trazas de Python. Recoge lo que reportan las guardas y lo convierte en un párrafo legible: *"Máscara: cubre el 34.2% del encuadre"*, *"FALTAN TROZOS: sube chunk_index en 1"*, *"Solo 2 pasos de muestreo: es muy poco"*.
+
 ### `Character Profile` — organización
 Carga la ficha de un personaje desde `profiles/<nombre>.json`: palabra de disparo, LoRA, fuerza en el pase de edición y en el de refinado, semilla del canon, prompt del canon y candado de identidad.
 
@@ -96,7 +121,22 @@ git clone https://github.com/gnarking99/custom-nodes.git comfyui-character-pipel
 
 Requiere **ComfyUI ≥ 0.23** (API de nodos V3). Sin dependencias más allá de las que ya trae ComfyUI (`torch`, `numpy`, `Pillow`).
 
-## Perfiles
+## Perfiles: ¿hace falta un JSON por LoRA?
+
+**No.** Y conviene entender el reparto:
+
+| Dato | De dónde sale | ¿JSON? |
+|---|---|---|
+| **Trigger word** | `LoRA Trigger Reader` — lo lee del archivo | **No** |
+| Arquitectura, dim, nº de imágenes | `LoRA Trigger Reader` | **No** |
+| steps, denoise, megapíxeles | `Quality Preset` | **No** |
+| Fuerzas que **tú** ajustaste a ojo | no se puede deducir | Sí |
+| Prompt del canon | no se puede deducir | Sí |
+| Candado de identidad | igual para todos | No (default del nodo) |
+
+O sea: **`LoRA Trigger Reader` + `Quality Preset` cubren lo que antes obligaba a escribir un JSON.** El perfil solo tiene sentido cuando llevas tiempo con un personaje y quieres congelar las fuerzas concretas que te funcionaron.
+
+Empieza sin perfiles. Créalos solo para los personajes que ya tengas afinados.
 
 ```
 profiles/
