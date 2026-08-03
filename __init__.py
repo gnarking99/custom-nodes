@@ -14,9 +14,14 @@ from .comfy_character_pipeline.profile import CharacterProfile
 from .comfy_character_pipeline.canon import CanonPanelBuilder, PromptTemplate
 from .comfy_character_pipeline.lora_meta import LoraTriggerReader
 from .comfy_character_pipeline.artist import QualityPreset, PipelineStatus
+from .comfy_character_pipeline.panel import ControlPanel
+
+# extension de frontend: js/control_panel.js
+WEB_DIRECTORY = "./js"
 
 NODES = [
     # artista
+    ControlPanel,
     QualityPreset,
     PipelineStatus,
     # organizacion
@@ -43,3 +48,6 @@ class CharacterPipelineExtension(ComfyExtension):
 
 async def comfy_entrypoint() -> CharacterPipelineExtension:
     return CharacterPipelineExtension()
+
+
+__all__ = ["comfy_entrypoint", "WEB_DIRECTORY"]
