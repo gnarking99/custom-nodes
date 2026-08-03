@@ -1,7 +1,7 @@
 {
   "id": "caf032be-c250-4781-8e45-56e73bfe1dfe",
   "revision": 0,
-  "last_node_id": 123,
+  "last_node_id": 124,
   "last_link_id": 166,
   "nodes": [
     {
@@ -3435,7 +3435,7 @@
     },
     {
       "id": 90,
-      "type": "QwenVL",
+      "type": "AILab_QwenVL",
       "pos": [
         3640,
         780
@@ -3472,7 +3472,7 @@
         }
       ],
       "properties": {
-        "Node name for S&R": "QwenVL"
+        "Node name for S&R": "AILab_QwenVL"
       },
       "widgets_values": [
         "You are a character continuity supervisor.\n\nThe image contains THREE panels side by side.\nPANEL 1 and PANEL 2 are two independent samples of the CANONICAL character, generated from the character's own trained model. PANEL 3 is the CURRENT render that must be corrected.\n\nTreat a feature as canonical ONLY if it appears consistently in BOTH panel 1 and panel 2. If a feature differs between panel 1 and panel 2, it is not reliable: ignore it completely.\n\nCompare ONLY physical, permanent character features: number of fingers, number of limbs, moles, scars, markings, tattoos, accessories, clothing items, props, logos, and the colours of those items.\n\nDo NOT mention pose, camera angle, facial expression, lighting, background, framing, mood or composition. Those are allowed to differ and must never be corrected.\n\nOutput ONE short English line listing ONLY what is MISSING or WRONG in PANEL 3, as a comma-separated list of corrective noun phrases. If nothing reliable is missing, output exactly: no changes.\n\nExample output: exactly three fingers on each hand, a small dark mole on the left cheek, a striped tie on the chest",
@@ -4367,12 +4367,13 @@
         "Node name for S&R": "CP_MaskGuard"
       },
       "widgets_values": [
-        "error",
+        true,
+        "warn",
         0.001,
         0.999,
         true
       ],
-      "title": "MaskGuard — antes del noise mask"
+      "title": "MaskGuard — antes del noise mask  #sw:mascara"
     },
     {
       "id": 112,
@@ -4908,6 +4909,30 @@
       "bgcolor": "#355",
       "widgets_values": [
         "# PANEL DE CONTROL\n\nTodo lo que hay que tocar esta **aqui**. No hace falta recorrer el flujo.\n\n## Interruptores\nCada uno enciende y apaga varios nodos a la vez, **esten donde esten en el grafo**:\n\n- **mascara** — el modo mascara completo: `SetLatentNoiseMask`, `DifferentialDiffusion` y `ImageCompositeMasked`. Antes habia que moverlos al mismo grupo; ahora se quedan donde tienen sentido.\n- **canon-auto** — la generacion automatica del canon muestreando el LoRA.\n- **vlm** — el analizador que compara canon contra actual y escribe el prompt.\n- **referencia-2** — la segunda imagen de referencia opcional.\n- **pase-2** — el refinado a alta resolucion.\n\n## Valores\nDebajo aparecen reflejados los widgets de los nodos importantes: el LoRA, la calidad, la imagen y el denoise. Tocarlos aqui es exactamente igual que tocarlos en su nodo.\n\n## Como se marca un nodo\nDoble clic en su titulo y anade:\n\n- `#sw:nombre` -> aparece un interruptor con ese nombre\n- `#ui` -> sus widgets se reflejan en el panel\n\nDos nodos con `#sw:mascara` se encienden y apagan juntos aunque esten en extremos opuestos del grafo. **Esa es toda la diferencia con el Fast Groups Bypasser de rgthree**, que obliga a meterlos en el mismo grupo.\n\nSi anades o quitas etiquetas, pulsa **Refrescar panel**."
+      ]
+    },
+    {
+      "id": 124,
+      "type": "MarkdownNote",
+      "pos": [
+        -580,
+        900
+      ],
+      "size": [
+        420,
+        420
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Por que el guard ya no revienta",
+      "properties": {},
+      "color": "#432",
+      "bgcolor": "#653",
+      "widgets_values": [
+        "# El guard de la mascara\n\n## Que pasaba\nAl apagar el interruptor `mascara`, los tres nodos del modo mascara se iban a bypass, **pero el `MaskGuard` no**: sus salidas alimentan el panel de ESTADO, y el `PreviewAny` de ese panel es un nodo de salida. Eso lo mantenia vivo, y sin mascara pintada se quejaba de una mascara vacia que nadie iba a usar.\n\n## Que se ha cambiado\n1. El `MaskGuard` ahora lleva **`#sw:mascara`**: se apaga con el mismo interruptor que el resto.\n2. Su modo por defecto pasa de `error` a **`warn`**: avisa por consola y deja pasar, en vez de detener la ejecucion.\n3. El nodo tiene un widget **`enabled`** para apagar solo la comprobacion sin bypasear el nodo.\n4. El panel de ESTADO tolera que sus entradas lleguen vacias (un nodo en bypass entrega `None`) y lo interpreta como *\"esa parte del flujo esta apagada\"*.\n\n## El principio\n**El guard avisa, el panel reporta.** Detener la ejecucion se reserva para cuando el artista dice explicitamente que quiere mascara. Si quieres el comportamiento duro, pon `on_empty` en `error`.\n\nCuando el modo mascara esta apagado, el panel dice:\n*\"Sin mascara. El flujo edita la imagen entera: es lo normal si el interruptor de mascara esta apagado.\"*"
       ]
     }
   ],

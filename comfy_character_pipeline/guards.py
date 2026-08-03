@@ -45,15 +45,26 @@ class MaskGuard(io.ComfyNode):
             ),
             inputs=[
                 io.Mask.Input("mask"),
+                io.Boolean.Input(
+                    "enabled", default=True,
+                    tooltip=(
+                        "Apagalo cuando NO estes usando mascara. Deja pasar todo sin "
+                        "comprobar nada, pero sigue reportando la cobertura para el panel "
+                        "de estado. Es lo que hay que usar cuando el modo mascara esta "
+                        "desactivado: sin esto el guard se queja de una mascara vacia que "
+                        "en realidad nadie va a usar."
+                    ),
+                ),
                 io.Combo.Input(
                     "on_empty",
-                    options=["error", "passthrough", "force_full", "force_none"],
-                    default="error",
+                    options=["warn", "error", "passthrough", "force_full", "force_none"],
+                    default="warn",
                     tooltip=(
+                        "warn: avisa por consola y deja pasar (recomendado si activas y "
+                        "desactivas la mascara a menudo; el panel de estado lo reporta igual). "
                         "error: detiene la ejecucion con un diagnostico. "
-                        "passthrough: la deja pasar tal cual. "
-                        "force_full: la sustituye por todo blanco. "
-                        "force_none: la sustituye por todo negro."
+                        "passthrough: la deja pasar en silencio. "
+                        "force_full / force_none: la sustituye por todo blanco o todo negro."
                     ),
                 ),
                 io.Float.Input(
@@ -82,9 +93,16 @@ class MaskGuard(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls, mask, on_empty, min_coverage, max_coverage, check_every_frame) -> io.NodeOutput:
+    def execute(cls, mask, enabled, on_empty, min_coverage, max_coverage,
+                check_every_frame) -> io.NodeOutput:
         m = _normalize_mask(mask)
         n, h, w = m.shape
+
+        if not enabled:
+            # Modo "no estoy usando mascara": reporta pero no juzga.
+            per_frame = m.reshape(n, -1).mean(dim=1)
+            return io.NodeOutput(m, float(per_frame.mean().item()), False,
+                                 float(per_frame.min().item()), 0)
 
         per_frame = m.reshape(n, -1).mean(dim=1)
         coverage = float(per_frame.mean().item())
@@ -99,7 +117,7 @@ class MaskGuard(io.ComfyNode):
         bad_frames = int(bad.sum().item())
         suspicious = bad_frames > 0
 
-        if suspicious and on_empty == "error":
+        if suspicious and on_empty in ("error", "warn"):
             hint = ""
             if (h, w) == (64, 64) and coverage_max == 0.0:
                 hint = (
@@ -121,12 +139,17 @@ class MaskGuard(io.ComfyNode):
                     f"{'...' if bad_frames > 12 else ''}). Una mascara animada o mal generada "
                     "en parte del clip produce parpadeo justo en esos frames."
                 )
-            raise ValueError(
+            msg = (
                 f"[MaskGuard] Mascara sospechosa. cobertura media={coverage:.5f}, "
                 f"minima={coverage_min:.5f}, maxima={coverage_max:.5f}, tamano={w}x{h}, "
                 f"frames={n}, frames malos={bad_frames}. "
                 f"Rango valido: {min_coverage}-{max_coverage}.{hint}"
             )
+            if on_empty == "error":
+                raise ValueError(msg)
+            print("AVISO " + msg)
+            print("  (modo `warn`: se deja pasar. Si no estas usando mascara, apaga "
+                  "`enabled` en este nodo o metelo en el interruptor de la mascara.)")
 
         out = m
         if suspicious:

@@ -148,6 +148,23 @@ class PipelineStatus(io.ComfyNode):
     def execute(cls, titulo, mask_coverage=-1.0, mask_bad_frames=-1, batch_did_match=True,
                 chunk_length=-1, chunk_total=-1, chunk_is_last=True, sampler_steps=-1,
                 trigger="", prompt_unresolved="", vlm_has_changes=True) -> io.NodeOutput:
+        # Un nodo aguas arriba en bypass entrega None por su salida. Eso NO es un
+        # fallo: significa "esa parte del flujo esta apagada". Se trata como
+        # "sin dato" en vez de reventar.
+        def v(x, d):
+            return d if x is None else x
+
+        mask_coverage = v(mask_coverage, -1.0)
+        mask_bad_frames = v(mask_bad_frames, -1)
+        batch_did_match = v(batch_did_match, True)
+        chunk_length = v(chunk_length, -1)
+        chunk_total = v(chunk_total, -1)
+        chunk_is_last = v(chunk_is_last, True)
+        sampler_steps = v(sampler_steps, -1)
+        trigger = v(trigger, "")
+        prompt_unresolved = v(prompt_unresolved, "")
+        vlm_has_changes = v(vlm_has_changes, True)
+
         ok, lines = True, [titulo, "=" * len(titulo), ""]
 
         if trigger:
@@ -155,7 +172,10 @@ class PipelineStatus(io.ComfyNode):
 
         if mask_coverage >= 0:
             pct = mask_coverage * 100
-            if mask_bad_frames and mask_bad_frames > 0:
+            if pct < 0.1 and mask_bad_frames <= 0:
+                lines.append("[i] Sin mascara. El flujo edita la imagen entera: es lo "
+                             "normal si el interruptor de mascara esta apagado.")
+            elif mask_bad_frames and mask_bad_frames > 0:
                 ok = False
                 lines.append(f"[!!] Mascara: {mask_bad_frames} frame(s) vacios o invertidos. "
                              "Repinta la mascara o usa un PNG blanco y negro aparte.")
