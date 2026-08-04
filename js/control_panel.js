@@ -1,7 +1,11 @@
 import { app } from "../../scripts/app.js";
+import {
+  C, rrect, wrap, ellipsis,
+  cpHeader, cpCaption, cpHint, cpButton, cpToggle, cpValue,
+} from "./widgets.js";
 
 /*
- * CP Control Panel v3
+ * CP Control Panel v4
  * -------------------
  * Panel unico para artistas. Controla nodos REPARTIDOS por todo el grafo sin
  * obligar a moverlos: la pertenencia se marca en el TITULO del nodo.
@@ -10,10 +14,8 @@ import { app } from "../../scripts/app.js";
  *   #ui         -> los widgets de ese nodo se reflejan aqui
  *   #img        -> la imagen de ese nodo se previsualiza aqui
  *
- * Todo lo visual se dibuja con widgets personalizados (objetos con su propio
- * metodo draw + computeSize). Es la unica forma limpia de mezclar dibujo propio
- * con los widgets normales de litegraph: si se dibujara en onDrawForeground
- * habria que adivinar las posiciones y se solaparia al cambiar de tamano.
+ * Todo se dibuja con el kit de widgets.js: los nativos de litegraph no se
+ * pueden estilar porque los pinta el propio motor segun su `type`.
  */
 
 const NODE_ID = "CP_ControlPanel";
@@ -24,22 +26,6 @@ const TAG_IMG = /#img\b/;
 const MODE_ON = 0;
 const MODE_MUTE = 2;
 const MODE_BYPASS = 4;
-
-const C = {
-  bg: "#141b18",
-  card: "#1b2622",
-  cardAlt: "#182120",
-  line: "#2c3a34",
-  green: "#5ecf8f",
-  greenDim: "#2f6b4c",
-  blue: "#5aa9e6",
-  amber: "#e8b04b",
-  red: "#e8695f",
-  text: "#dfe7e3",
-  dim: "#8fa39a",
-  faint: "#5d6f67",
-};
-
 const IMG_H = 230;
 
 /* ------------------------------------------------------------ utilidades */
@@ -49,10 +35,15 @@ function allNodes() {
   return g._nodes || g.nodes || [];
 }
 
-function cleanTitle(n) {
-  return String(n.title || n.type || "nodo")
-    .replace(TAG_SW, "").replace(TAG_UI, "").replace(TAG_IMG, "")
-    .replace(/\s+/g, " ").trim() || n.type;
+/** Nombre corto y legible de un nodo: sin etiquetas, sin flechas, sin "1)". */
+function shortTitle(n) {
+  let t = String(n.title || n.type || "nodo")
+    .replace(TAG_SW, "").replace(TAG_UI, "").replace(TAG_IMG, "");
+  t = t.split(/→|->|\bAQUI\b|:/)[0];
+  t = t.replace(/^\s*\d+\)\s*/, "").replace(/[—–-]\s*$/, "");
+  t = t.replace(/\s+/g, " ").trim();
+  if (t.length > 26) t = t.slice(0, 25) + "…";
+  return t || n.type;
 }
 
 function scan(self) {
@@ -84,9 +75,7 @@ function toast(msg, severity = "info") {
     app.extensionManager?.toast?.add({
       severity, summary: "Panel de control", detail: msg, life: 4500,
     });
-  } catch (e) {
-    console.log("[CP_ControlPanel]", msg);
-  }
+  } catch (e) { console.log("[CP_ControlPanel]", msg); }
 }
 
 function focusNode(n) {
@@ -98,10 +87,7 @@ function focusNode(n) {
 }
 
 function openMaskEditor(target) {
-  if (!target) {
-    toast("Marca tu nodo de imagen con #img en el titulo.", "warn");
-    return;
-  }
+  if (!target) { toast("Marca tu nodo de imagen con #img en el titulo.", "warn"); return; }
   focusNode(target);
   try {
     const cmd = app.extensionManager?.command;
@@ -119,240 +105,109 @@ function openMaskEditor(target) {
   toast("Nodo de imagen seleccionado: boton derecho -> Open in MaskEditor.", "warn");
 }
 
-/* ------------------------------------------------------------ dibujo base */
-function rrect(ctx, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-}
-
-function wrap(ctx, text, maxW) {
-  const out = [];
-  for (const para of String(text).split("\n")) {
-    let line = "";
-    for (const word of para.split(" ")) {
-      const t = line ? line + " " + word : word;
-      if (ctx.measureText(t).width > maxW && line) { out.push(line); line = word; }
-      else line = t;
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-/* ------------------------------------------------------- widgets propios */
-function custom(node, height, draw) {
-  const w = {
-    type: "cp_custom", name: "", value: "", options: { serialize: false },
-    serialize: false, __cpKind: "art",
-    computeSize: () => [0, height],
-    draw,
-  };
-  node.widgets.push(w);
-  return w;
-}
-
-/** Cabecera de seccion: numero en circulo, titulo y subtitulo. */
-function header(node, num, title, subtitle, colour) {
-  custom(node, subtitle ? 52 : 38, (ctx, n, W, y) => {
-    const x = 12, w = W - 24;
-    ctx.save();
-    ctx.fillStyle = colour;
-    rrect(ctx, x, y + 6, 3, (subtitle ? 36 : 22), 2);
-    ctx.fill();
-
-    if (num) {
-      ctx.beginPath();
-      ctx.arc(x + 22, y + 15, 10, 0, Math.PI * 2);
-      ctx.fillStyle = colour;
-      ctx.fill();
-      ctx.fillStyle = C.bg;
-      ctx.font = "bold 12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(String(num), x + 22, y + 19);
-      ctx.textAlign = "left";
-    }
-
-    ctx.fillStyle = colour;
-    ctx.font = "bold 13px sans-serif";
-    ctx.fillText(title, x + (num ? 40 : 12), y + 19);
-
-    if (subtitle) {
-      ctx.fillStyle = C.dim;
-      ctx.font = "11px sans-serif";
-      const lines = wrap(ctx, subtitle, w - (num ? 40 : 12));
-      ctx.fillText(lines[0], x + (num ? 40 : 12), y + 36);
-      if (lines[1]) ctx.fillText(lines[1], x + (num ? 40 : 12), y + 48);
-    }
-    ctx.restore();
-  });
-}
-
-/** Texto de ayuda en gris. */
-function hint(node, text) {
-  let cache = null, cacheW = 0;
-  const probe = document.createElement("canvas").getContext("2d");
-  probe.font = "11px sans-serif";
-  const measure = (w) => {
-    if (!cache || cacheW !== w) { cache = wrap(probe, text, w); cacheW = w; }
-    return cache;
-  };
-  const w = {
-    type: "cp_custom", name: "", value: "", serialize: false, __cpKind: "art",
-    computeSize: (width) => [0, measure((width || 300) - 30).length * 14 + 8],
-    draw: (ctx, n, W, y) => {
-      ctx.save();
-      ctx.fillStyle = C.dim;
-      ctx.font = "11px sans-serif";
-      let yy = y + 12;
-      for (const l of measure(W - 30)) { ctx.fillText(l, 16, yy); yy += 14; }
-      ctx.restore();
-    },
-  };
-  node.widgets.push(w);
-  return w;
-}
-
-/** Tarjeta con la imagen del nodo #img + insignia de estado de la mascara. */
+/* ------------------------------------------------------- piezas visuales */
 function imageCard(node) {
-  custom(node, IMG_H, (ctx, n, W, y) => {
-    const x = 12, w = W - 24, h = IMG_H - 12;
-    ctx.save();
-    ctx.fillStyle = C.cardAlt;
-    rrect(ctx, x, y, w, h, 8);
-    ctx.fill();
-    ctx.strokeStyle = C.line;
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    const target = n.__cpImgNode;
-    const img = target?.imgs?.[0];
-    if (img && img.width) {
-      const k = Math.min((w - 16) / img.width, (h - 30) / img.height);
-      const dw = img.width * k, dh = img.height * k;
-      const ix = x + (w - dw) / 2, iy = y + 8;
+  node.widgets.push({
+    type: "cp_img", name: "", value: "", serialize: false, __cpKind: "art",
+    options: { serialize: false },
+    computeSize: () => [0, IMG_H],
+    draw(ctx, n, W, y) {
+      const x = 14, w = W - 28, h = IMG_H - 12;
       ctx.save();
-      rrect(ctx, ix, iy, dw, dh, 5);
-      ctx.clip();
-      ctx.drawImage(img, ix, iy, dw, dh);
-      ctx.restore();
-
-      const painted = String(target?.widgets?.[0]?.value || "").includes("clipspace");
-      const label = painted ? "MASCARA PINTADA" : "sin mascara";
-      const col = painted ? C.green : C.faint;
-      ctx.font = "bold 10px sans-serif";
-      const tw = ctx.measureText(label).width + 16;
-      ctx.fillStyle = "rgba(10,16,13,0.82)";
-      rrect(ctx, ix + 6, iy + 6, tw, 18, 9);
+      ctx.fillStyle = C.slot;
+      rrect(ctx, x, y, w, h, 8);
       ctx.fill();
-      ctx.fillStyle = col;
-      ctx.fillText(label, ix + 14, iy + 19);
-    } else {
-      ctx.fillStyle = C.faint;
-      ctx.font = "12px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(target ? "lanza una vez para ver la imagen"
-                          : "marca tu nodo de imagen con  #img",
-                   x + w / 2, y + h / 2);
-      ctx.textAlign = "left";
-    }
-    ctx.restore();
+      ctx.strokeStyle = C.line;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      const target = n.__cpImgNode;
+      const img = target?.imgs?.[0];
+      if (img && img.width) {
+        const k = Math.min((w - 16) / img.width, (h - 16) / img.height);
+        const dw = img.width * k, dh = img.height * k;
+        const ix = x + (w - dw) / 2, iy = y + (h - dh) / 2;
+        ctx.save();
+        rrect(ctx, ix, iy, dw, dh, 5);
+        ctx.clip();
+        ctx.drawImage(img, ix, iy, dw, dh);
+        ctx.restore();
+
+        const painted = String(target?.widgets?.[0]?.value || "").includes("clipspace");
+        const label = painted ? "MASCARA PINTADA" : "SIN MASCARA";
+        ctx.font = "bold 9px sans-serif";
+        const tw = ctx.measureText(label).width + 18;
+        ctx.fillStyle = "rgba(8,14,11,0.86)";
+        rrect(ctx, ix + 8, iy + 8, tw, 18, 9);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(ix + 17, iy + 17, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = painted ? C.green : C.faint;
+        ctx.fill();
+        ctx.fillStyle = painted ? C.green : C.faint;
+        ctx.fillText(label, ix + 25, iy + 21);
+      } else {
+        ctx.fillStyle = C.faint;
+        ctx.font = "12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(target ? "lanza una vez para ver la imagen"
+                            : "marca tu nodo de imagen con  #img",
+                     x + w / 2, y + h / 2);
+        ctx.textAlign = "left";
+      }
+      ctx.restore();
+    },
   });
 }
 
-/** Medidor del ajuste de denoise, con zonas de color. */
 function denoiseGauge(node, getValue) {
-  custom(node, 46, (ctx, n, W, y) => {
-    const x = 16, w = W - 32, h = 8, by = y + 22;
-    const v = getValue();
-    if (v === null) return;
-    ctx.save();
-    ctx.fillStyle = C.dim;
-    ctx.font = "11px sans-serif";
-    ctx.fillText("respeta el original", x, y + 14);
-    ctx.textAlign = "right";
-    ctx.fillText("mas detalle nuevo", x + w, y + 14);
-    ctx.textAlign = "left";
+  node.widgets.push({
+    type: "cp_gauge", name: "", value: "", serialize: false, __cpKind: "art",
+    options: { serialize: false },
+    computeSize: () => [0, 52],
+    draw(ctx, n, W, y) {
+      const v = getValue();
+      if (v === null || v === undefined) return;
+      const x = 18, w = W - 36, h = 8, by = y + 24;
+      ctx.save();
+      ctx.fillStyle = C.faint;
+      ctx.font = "9px sans-serif";
+      ctx.fillText("RESPETA EL ORIGINAL", x, y + 14);
+      ctx.textAlign = "right";
+      ctx.fillText("MAS DETALLE NUEVO", x + w, y + 14);
+      ctx.textAlign = "left";
 
-    const zones = [[0, 0.35, C.greenDim], [0.35, 0.72, C.green], [0.72, 1, C.red]];
-    for (const [a, b, col] of zones) {
-      ctx.fillStyle = col;
-      ctx.fillRect(x + w * a, by, w * (b - a), h);
-    }
-    ctx.fillStyle = C.line;
-    ctx.fillRect(x, by, w, 1);
+      for (const [a, b, col] of [[0, .35, C.greenDim], [.35, .72, C.green], [.72, 1, C.red]]) {
+        ctx.fillStyle = col;
+        ctx.fillRect(x + w * a, by, w * (b - a), h);
+      }
+      const t = Math.max(0, Math.min(1, (v + 0.2) / 0.4));
+      const px = x + w * t;
+      ctx.beginPath();
+      ctx.arc(px, by + h / 2, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#0c1410";
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = t > .72 ? C.red : (t > .35 ? C.green : C.blue);
+      ctx.stroke();
 
-    const t = Math.max(0, Math.min(1, (v + 0.2) / 0.4));
-    const px = x + w * t;
-    ctx.beginPath();
-    ctx.arc(px, by + h / 2, 7, 0, Math.PI * 2);
-    ctx.fillStyle = "#0d1512";
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = t > 0.72 ? C.red : (t > 0.35 ? C.green : C.blue);
-    ctx.stroke();
-
-    ctx.fillStyle = t > 0.72 ? C.red : C.text;
-    ctx.font = "bold 11px sans-serif";
-    ctx.textAlign = "center";
-    const msg = t > 0.72 ? "zona de riesgo: la cara puede cambiar"
-              : (t < 0.28 ? "muy conservador" : "zona util");
-    ctx.fillText(msg, x + w / 2, by + 24);
-    ctx.textAlign = "left";
-    ctx.restore();
+      ctx.fillStyle = t > .72 ? C.red : C.dim;
+      ctx.font = "bold 10px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(t > .72 ? "ZONA DE RIESGO · LA CARA PUEDE CAMBIAR"
+                 : (t < .28 ? "MUY CONSERVADOR" : "ZONA UTIL"),
+                   x + w / 2, by + 24);
+      ctx.textAlign = "left";
+      ctx.restore();
+    },
   });
 }
 
-/** Tarjeta de diagnostico: sintoma en color + solucion. */
-function diagCard(node, getDiag) {
-  const probe = document.createElement("canvas").getContext("2d");
-  probe.font = "11px sans-serif";
-  const w = {
-    type: "cp_custom", name: "", value: "", serialize: false, __cpKind: "art",
-    computeSize: (width) => {
-      const d = getDiag();
-      return [0, wrap(probe, d[1], (width || 320) - 46).length * 15 + 46];
-    },
-    draw: (ctx, n, W, y) => {
-      const d = getDiag();
-      const first = (n.__cpDiag ?? 0) === 0;
-      const col = first ? C.blue : C.amber;
-      ctx.save();
-      ctx.font = "11px sans-serif";
-      const lines = wrap(ctx, d[1], W - 46);
-      const h = lines.length * 15 + 38;
-      ctx.fillStyle = C.card;
-      rrect(ctx, 12, y, W - 24, h, 8);
-      ctx.fill();
-      ctx.fillStyle = col;
-      rrect(ctx, 12, y, 3, h, 2);
-      ctx.fill();
-
-      ctx.fillStyle = col;
-      ctx.font = "bold 12px sans-serif";
-      ctx.fillText(first ? "Elige tu sintoma arriba" : d[0], 24, y + 18);
-      ctx.fillStyle = C.text;
-      ctx.font = "11px sans-serif";
-      let yy = y + 34;
-      for (const l of lines) { ctx.fillText(l, 24, yy); yy += 15; }
-      ctx.restore();
-    },
-  };
-  node.widgets.push(w);
-  return w;
-}
-
-/* ------------------------------------------------------------ diagnostico */
 const DIAG = [
   ["— elige un sintoma —",
    "Selecciona arriba que le pasa a tu imagen y aqui aparece exactamente que tocar."],
   ["La cara o la pose CAMBIAN",
-   "Baja el denoise: Calidad -> ajuste_denoise a -0.06. Si sigue, pon la calidad en 'Solo limpiar'. Por encima de 0.55 el modelo reinterpreta al personaje en vez de restaurarlo."],
+   "Baja el denoise: ajuste_denoise a -0.06. Si sigue, pon la calidad en 'Solo limpiar'. Por encima de 0.55 el modelo reinterpreta al personaje en vez de restaurarlo."],
   ["No recupera NADA de detalle",
    "Sube el denoise: ajuste_denoise a +0.05. Y comprueba que el interruptor 'vlm' este ACTIVO: si no, el prompt no dice que corregir y el modelo no sabe que anadir."],
   ["Sale con textura plastica",
@@ -362,20 +217,61 @@ const DIAG = [
   ["El fondo cambia y no deberia",
    "Enciende el interruptor 'mascara' y pinta encima del personaje con el boton de arriba."],
   ["El resultado es IGUAL que el original",
-   "El composite esta tapando el resultado con una mascara vacia. Mira la insignia de la imagen: si dice 'sin mascara', no llego. Apaga el interruptor 'mascara' o repinta."],
+   "El composite esta tapando el resultado con una mascara vacia. Mira la insignia de la imagen: si dice SIN MASCARA, no llego. Apaga el interruptor 'mascara' o repinta."],
   ["Los colores se van",
    "Sube el strength del ColorMatch a 0.85."],
   ["Tarda demasiado",
    "Calidad -> 'Borrador (rapido)' mientras pruebas encuadre y prompt. Apaga los interruptores 'canon-auto' y 'pase-2' hasta el render final."],
   ["Da error y no lo entiendo",
-   "Mira el cuadro ESTADO del flujo: traduce los errores a castellano. Los avisos marcados [!!] son los que hay que arreglar."],
+   "Mira el cuadro ESTADO del flujo: traduce los errores a castellano. Los avisos [!!] son los que hay que arreglar."],
 ];
 
+function diagCard(node, getDiag) {
+  const probe = document.createElement("canvas").getContext("2d");
+  probe.font = "11px sans-serif";
+  node.widgets.push({
+    type: "cp_diag", name: "", value: "", serialize: false, __cpKind: "art",
+    options: { serialize: false },
+    computeSize: (width) => [0, wrap(probe, getDiag()[1], (width || 340) - 50).length * 15 + 46],
+    draw(ctx, n, W, y) {
+      const d = getDiag();
+      const first = (n.__cpDiag ?? 0) === 0;
+      const col = first ? C.blue : C.amber;
+      ctx.save();
+      ctx.font = "11px sans-serif";
+      const lines = wrap(ctx, d[1], W - 50);
+      const h = lines.length * 15 + 38;
+      ctx.fillStyle = C.card;
+      rrect(ctx, 14, y, W - 28, h, 8);
+      ctx.fill();
+      ctx.fillStyle = col;
+      rrect(ctx, 14, y, 3, h, 2);
+      ctx.fill();
+      ctx.fillStyle = col;
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillText(first ? "Elige tu sintoma arriba" : d[0], 26, y + 19);
+      ctx.fillStyle = C.text;
+      ctx.font = "11px sans-serif";
+      let yy = y + 36;
+      for (const l of lines) { ctx.fillText(l, 26, yy); yy += 15; }
+      ctx.restore();
+    },
+  });
+}
+
 /* ------------------------------------------------------------ construccion */
+function kindOf(tw) {
+  const t = String(tw.type || "").toLowerCase();
+  if (t === "combo" || Array.isArray(tw.options?.values)) return "combo";
+  if (t === "number" || t === "slider" || typeof tw.value === "number") return "number";
+  if (t === "toggle" || typeof tw.value === "boolean") return "bool";
+  return "text";
+}
+
 function build(self) {
   const keep = new Map();
   for (const w of self.widgets || []) {
-    if (w.__cpKind === "switch") keep.set(w.__cpKey, w.value);
+    if (w.__cpKind === "switch") keep.set(w.name, w.value);
   }
   self.widgets = [];
 
@@ -383,80 +279,101 @@ function build(self) {
   const offMode = self.properties?.["cp.off_mode"] === "mute" ? MODE_MUTE : MODE_BYPASS;
   self.__cpImgNode = imgNode;
 
-  /* ---------- 1 · imagen ---------- */
-  header(self, 1, "TU IMAGEN", "Carga el render y pinta encima del personaje.", C.green);
+  /* 1 · imagen */
+  cpHeader(self, 1, "TU IMAGEN", "Carga el render y pinta encima del personaje.", C.green);
   imageCard(self);
-  const b1 = self.addWidget("button", "Pintar mascara", null, () => openMaskEditor(self.__cpImgNode));
-  b1.__cpKind = "btn"; b1.serialize = false;
-  const b2 = self.addWidget("button", "Ir al nodo de imagen", null,
+  cpButton(self, app, "PINTAR MASCARA", () => openMaskEditor(self.__cpImgNode), { primary: true });
+  cpButton(self, app, "Ir al nodo de imagen",
     () => self.__cpImgNode ? focusNode(self.__cpImgNode)
                            : toast("Marca tu nodo de imagen con #img.", "warn"));
-  b2.__cpKind = "btn"; b2.serialize = false;
 
-  /* ---------- 2 · que se ejecuta ---------- */
+  /* 2 · que se ejecuta */
   if (switches.size) {
-    header(self, 2, "QUE SE EJECUTA",
+    cpHeader(self, 2, "QUE SE EJECUTA",
       "Cada interruptor enciende varios nodos a la vez, esten donde esten.", C.blue);
     for (const key of [...switches.keys()].sort()) {
       const targets = switches.get(key);
       const cur = keep.has(key) ? keep.get(key) : targets.every((n) => n.mode === MODE_ON);
-      const w = self.addWidget("toggle", `${key}   ·   ${targets.length} nodos`, cur,
-        (v) => setMode(scan(self).switches.get(key) || [], v, offMode),
-        { on: "ACTIVO", off: "apagado" });
-      w.__cpKind = "switch"; w.__cpKey = key; w.serialize = false;
+      cpToggle(self, app, key, targets.length,
+        // getter en vivo: el estado real es el modo de los nodos, no una copia
+        () => {
+          const t = scan(self).switches.get(key) || [];
+          return t.length ? t.every((n) => n.mode === MODE_ON) : false;
+        },
+        (v) => setMode(scan(self).switches.get(key) || [], v, offMode));
       setMode(targets, cur, offMode);
     }
-    hint(self, "Apagar lo que no uses acelera mucho las pruebas. Para el render final, enciendelo todo.");
-    const bAll = self.addWidget("button", "Encender todo", null, () => {
+    cpHint(self, "Apagar lo que no uses acelera mucho las pruebas. Para el render final, enciendelo todo.");
+    cpButton(self, app, "Encender todo", () => {
       for (const nodes of scan(self).switches.values()) setMode(nodes, true, offMode);
       build(self);
     });
-    bAll.__cpKind = "btn"; bAll.serialize = false;
   }
 
-  /* ---------- 3 · valores ---------- */
+  /* 3 · ajustes, agrupados por nodo de origen */
   if (uiNodes.length) {
-    header(self, 3, "AJUSTES", "Estos son los unicos numeros que hay que tocar.", C.amber);
-    let adjWidget = null;
+    cpHeader(self, 3, "AJUSTES", "Estos son los unicos numeros que hay que tocar.", C.amber);
+    let adj = null;
     for (const target of uiNodes) {
-      const label = cleanTitle(target);
-      for (const tw of target.widgets || []) {
-        if (!tw || tw.__cpKind) continue;
-        if (tw.type === "converted-widget" || tw.type === "hidden") continue;
-        if (tw.name === "control_after_generate") continue;
+      const rows = (target.widgets || []).filter((tw) =>
+        tw && !tw.__cpKind &&
+        tw.type !== "converted-widget" && tw.type !== "hidden" &&
+        tw.name !== "control_after_generate");
+      if (!rows.length) continue;
+      cpCaption(self, shortTitle(target));
+      for (const tw of rows) {
+        const kind = kindOf(tw);
         try {
-          const p = self.addWidget(tw.type, `${label} · ${tw.name}`, tw.value, (v) => {
-            tw.value = v;
-            if (typeof tw.callback === "function") tw.callback(v, app.canvas, target);
-            app.graph.setDirtyCanvas(true, true);
-          }, tw.options || {});
-          p.__cpKind = "proxy"; p.serialize = false;
-          if (tw.name === "ajuste_denoise") adjWidget = tw;
+          if (kind === "bool") {
+            cpToggle(self, app, tw.name, 0, () => !!tw.value, (v) => {
+              tw.value = v;
+              tw.callback?.(v, app.canvas, target);
+              app.graph.setDirtyCanvas(true, true);
+            });
+          } else {
+            cpValue(self, app, tw.name,
+              () => tw.value,
+              (v) => {
+                tw.value = v;
+                tw.callback?.(v, app.canvas, target);
+                app.graph.setDirtyCanvas(true, true);
+              },
+              {
+                kind,
+                values: tw.options?.values || [],
+                step: tw.options?.step ? tw.options.step / 10 : 0.01,
+                min: tw.options?.min, max: tw.options?.max,
+                precision: tw.options?.precision,
+              });
+          }
+          if (tw.name === "ajuste_denoise") adj = tw;
         } catch (err) {
           console.warn("[CP_ControlPanel] widget no reflejado:", tw?.name, err);
         }
       }
     }
-    if (adjWidget) denoiseGauge(self, () => Number(adjWidget.value) || 0);
+    if (adj) denoiseGauge(self, () => Number(adj.value) || 0);
   }
 
-  /* ---------- 4 · diagnostico ---------- */
-  header(self, 4, "ALGO NO SALE BIEN?", "Elige el sintoma y te digo que tocar.", C.red);
-  const dw = self.addWidget("combo", "sintoma", DIAG[self.__cpDiag ?? 0][0], (v) => {
-    const i = DIAG.findIndex((d) => d[0] === v);
-    self.__cpDiag = i < 0 ? 0 : i;
-    self.setSize(self.computeSize());
-    app.graph.setDirtyCanvas(true, true);
-  }, { values: DIAG.map((d) => d[0]) });
-  dw.__cpKind = "diag"; dw.serialize = false;
+  /* 4 · diagnostico */
+  cpHeader(self, 4, "ALGO NO SALE BIEN?", "Elige el sintoma y te digo que tocar.", C.red);
+  cpValue(self, app, "sintoma",
+    () => DIAG[self.__cpDiag ?? 0][0],
+    (v) => {
+      const i = DIAG.findIndex((d) => d[0] === v);
+      self.__cpDiag = i < 0 ? 0 : i;
+      self.setSize(self.computeSize());
+      app.graph.setDirtyCanvas(true, true);
+    },
+    { kind: "combo", values: DIAG.map((d) => d[0]) });
   diagCard(self, () => DIAG[self.__cpDiag ?? 0]);
 
   if (!switches.size && !uiNodes.length && !imgNode) {
-    hint(self, "Ningun nodo marcado todavia. Doble clic en el titulo de un nodo y anade #sw:nombre, #ui o #img.");
+    cpHint(self, "Ningun nodo marcado todavia. Doble clic en el titulo de un nodo y anade #sw:nombre, #ui o #img.");
   }
 
   const s = self.computeSize();
-  self.setSize([Math.max(390, s[0]), s[1]]);
+  self.setSize([Math.max(400, s[0]), s[1]]);
   app.graph.setDirtyCanvas(true, true);
 }
 
@@ -487,15 +404,14 @@ app.registerExtension({
       return r;
     };
 
-    // franja superior con el titulo, para que se lea de lejos
-    const onDraw = nodeType.prototype.onDrawBackground;
+    const onBg = nodeType.prototype.onDrawBackground;
     nodeType.prototype.onDrawBackground = function (ctx) {
-      const r = onDraw?.apply(this, arguments);
+      const r = onBg?.apply(this, arguments);
       if (this.flags?.collapsed) return r;
       try {
         ctx.save();
         const g = ctx.createLinearGradient(0, 0, this.size[0], 0);
-        g.addColorStop(0, "rgba(94,207,143,0.18)");
+        g.addColorStop(0, "rgba(94,207,143,0.22)");
         g.addColorStop(1, "rgba(94,207,143,0)");
         ctx.fillStyle = g;
         ctx.fillRect(0, 0, this.size[0], 3);
