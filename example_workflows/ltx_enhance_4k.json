@@ -1,8 +1,8 @@
 {
   "id": "bf49d1f9-dbc2-44fd-8134-5387b6bc0575",
   "revision": 0,
-  "last_node_id": 75,
-  "last_link_id": 124,
+  "last_node_id": 81,
+  "last_link_id": 135,
   "nodes": [
     {
       "id": 3,
@@ -983,7 +983,7 @@
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 93
+          "link": 125
         }
       ],
       "outputs": [
@@ -1409,8 +1409,8 @@
         "Node name for S&R": "LTXVTiledVAEDecode"
       },
       "widgets_values": [
-        3,
-        3,
+        2,
+        2,
         6,
         false,
         "auto",
@@ -1437,7 +1437,7 @@
         {
           "name": "image1",
           "type": "IMAGE,MASK",
-          "link": 95
+          "link": 130
         },
         {
           "name": "image2",
@@ -1711,7 +1711,7 @@
         {
           "name": "image_ref",
           "type": "IMAGE",
-          "link": 94
+          "link": 131
         },
         {
           "name": "image_target",
@@ -2313,7 +2313,8 @@
           "name": "images",
           "type": "IMAGE",
           "links": [
-            76
+            76,
+            127
           ]
         },
         {
@@ -2422,14 +2423,16 @@
           "name": "final_w",
           "type": "INT",
           "links": [
-            120
+            120,
+            128
           ]
         },
         {
           "name": "final_h",
           "type": "INT",
           "links": [
-            121
+            121,
+            129
           ]
         },
         {
@@ -2522,7 +2525,9 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            92
+            92,
+            125,
+            126
           ]
         }
       ],
@@ -2578,11 +2583,7 @@
         {
           "name": "IMAGE",
           "type": "IMAGE",
-          "links": [
-            93,
-            94,
-            95
-          ]
+          "links": []
         }
       ],
       "properties": {
@@ -2609,7 +2610,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "image",
@@ -2637,9 +2638,7 @@
         {
           "name": "IMAGE",
           "type": "IMAGE",
-          "links": [
-            103
-          ]
+          "links": []
         }
       ],
       "properties": {
@@ -2651,7 +2650,7 @@
         2304,
         "disabled"
       ],
-      "title": "Referencia x4  #sw:4k"
+      "title": "Referencia x4 — YA NO SE USA (el IC-LoRA quiere la baja)"
     },
     {
       "id": 62,
@@ -2666,7 +2665,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "samples",
@@ -2712,7 +2711,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "positive",
@@ -2737,7 +2736,7 @@
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 103
+          "link": 126
         }
       ],
       "outputs": [
@@ -2792,7 +2791,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "video_latent",
@@ -2833,7 +2832,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [],
       "outputs": [
         {
@@ -2866,7 +2865,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "model",
@@ -2914,7 +2913,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [],
       "outputs": [
         {
@@ -2946,7 +2945,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [],
       "outputs": [
         {
@@ -2978,7 +2977,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "noise",
@@ -3039,7 +3038,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "av_latent",
@@ -3080,7 +3079,7 @@
       ],
       "flags": {},
       "order": 0,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "positive",
@@ -3167,7 +3166,8 @@
           "links": [
             122,
             123,
-            124
+            124,
+            133
           ]
         }
       ],
@@ -3250,6 +3250,230 @@
       "bgcolor": "#653",
       "widgets_values": [
         "# Que se ha cambiado\n\n## 1. El troceado ya no falla\nTu video tiene **213 frames**. Con trozos de 97: 0-96 y 97-193 salen bien, pero el tercero son **19 frames** mientras `EmptyLTXVLatentVideo` seguia pidiendo 97. De ahi el fallo \"dependiendo del video\".\n\nLa causa: la longitud se escribia en un `PrimitiveInt` que alimentaba a la vez al troceador y a los dos latentes. Cuando el troceo real devolvia menos, los latentes no se enteraban.\n\nAhora `CP_VideoChunk` calcula la longitud **del trozo real**, redondeada a 8n+1, y la reparte a los tres sitios. Ademas avisa cuando has recorrido el clip entero en vez de repetir el ultimo trozo en silencio.\n\nCon 213 frames y solape 8 salen **3 trozos**: lanza con `chunk_index` 0, 1 y 2.\n\n## 2. La resolucion se calcula sola\nEliges la **entrega** (UHD 4K) y el nodo calcula hacia atras la base, la x2 y la x4, respetando la relacion de aspecto de TU video. Antes habia que escribir el mismo par de numeros en tres sitios y voltearlos a mano si el clip era vertical.\n\nMira el cuadro **Resoluciones calculadas** antes de lanzar.\n\n## 3. El IC-LoRA era de otra familia\nTenias `ltx-2-19b-ic-lora-detailer` — el Detailer es de **LTX-2 (19B)**, no de **LTX-2.3 (22B)**. Cambiado al **Pixel Spatial Upscaler x2**, que si es nativo de 2.3 y esta hecho justo para esto."
+      ]
+    },
+    {
+      "id": 76,
+      "type": "ImageScale",
+      "pos": [
+        -11,
+        1900
+      ],
+      "size": [
+        420,
+        130
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 127
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "link": 128,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": 129,
+          "widget": {
+            "name": "height"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            130,
+            131,
+            132
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        3840,
+        2160,
+        "disabled"
+      ],
+      "title": "ORIGINAL sin degradar, a medida de entrega"
+    },
+    {
+      "id": 77,
+      "type": "CP_ABDiff",
+      "pos": [
+        4400,
+        20
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "IMAGE",
+          "link": 132
+        },
+        {
+          "name": "b",
+          "type": "IMAGE",
+          "link": 133
+        }
+      ],
+      "outputs": [
+        {
+          "name": "visual",
+          "type": "IMAGE",
+          "links": [
+            135
+          ]
+        },
+        {
+          "name": "mean_diff",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "max_diff",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "veredicto",
+          "type": "STRING",
+          "links": [
+            134
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CP_ABDiff"
+      },
+      "widgets_values": [
+        12.0,
+        "b (el resultado)"
+      ],
+      "title": "MEDIDOR A/B — original vs final"
+    },
+    {
+      "id": 78,
+      "type": "PreviewAny",
+      "pos": [
+        4400,
+        250
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 134
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "VEREDICTO  <- LEE ESTO PRIMERO"
+    },
+    {
+      "id": 79,
+      "type": "PreviewImage",
+      "pos": [
+        4400,
+        480
+      ],
+      "size": [
+        400,
+        380
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 135
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "DONDE cambia (diferencia amplificada)"
+    },
+    {
+      "id": 80,
+      "type": "MarkdownNote",
+      "pos": [
+        4400,
+        900
+      ],
+      "size": [
+        520,
+        900
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "POR QUE NO NOTABAS DIFERENCIA",
+      "properties": {},
+      "color": "#a13030",
+      "bgcolor": "#532",
+      "widgets_values": [
+        "# Diagnostico\n\n## La causa principal\nLa ficha del **IC-LoRA Pixel Spatial Upscaler** dice literalmente:\n\n> *Connect your low-resolution clip as the reference video.*\n\nEse adaptador esta entrenado para **referencia de BAJA resolucion -> render de ALTA**. Mis etapas 2 y 3 le pasaban una referencia **ya a la resolucion de destino**. Eso le dice al modelo *\"la respuesta ya esta aqui\"*: con una cola de sigmas corta converge directo a la entrada y la salida es tu video reescalado.\n\nAhora las tres etapas reciben la **referencia BASE**. Es un cambio de dos cables y es lo que desbloquea que sintetice detalle.\n\n## La causa secundaria\nLa comparativa enfrentaba el resultado contra la referencia **ya pasada por `LTXVPreprocess`**, que degrada a proposito. Comparar contra algo degradado hace que cualquier salida parezca correcta.\n\nAhora se compara contra los frames **sin degradar**, escalados a la medida de entrega. Es una comparacion justa.\n\n## Como saberlo con un numero\nEl **MEDIDOR A/B** de arriba. `mean_diff`:\n\n| valor | significa |\n|---|---|\n| < 0.002 | **no-op**: la etapa no toca la imagen |\n| 0.002-0.005 | cambio minimo |\n| **0.005-0.03** | **refinado sano** |\n| 0.03-0.08 | cambio fuerte, vigila los rasgos |\n| > 0.08 | reinterpretacion, no restauracion |\n\nY la imagen de diferencia amplificada dice **donde** cambia: si solo se ilumina el borde del encuadre es reescalado; si se ilumina la textura de piel y ropa, esta refinando de verdad."
+      ]
+    },
+    {
+      "id": 81,
+      "type": "MarkdownNote",
+      "pos": [
+        4940,
+        900
+      ],
+      "size": [
+        520,
+        900
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "4K: por que SeedVR2 y no una tercera etapa",
+      "properties": {},
+      "color": "#243",
+      "bgcolor": "#355",
+      "widgets_values": [
+        "# Mi recomendacion: SeedVR2\n\nLa etapa x4 de LTX queda **en bypass**. Razones con numeros:\n\n## Coste\nLa atencion es O(n^2) sobre los tokens. La etapa x4 tiene **4 veces** los pixeles de la x2, o sea **~16 veces** su coste de atencion — para darte **2 pasos** de refinado sobre algo ya refinado. Es la peor relacion coste/beneficio del flujo.\n\n## Que hace realmente el upscaler espacial\nReportado por la comunidad: *sharpens and refines but doesn't correct structural problems*. A partir de la etapa x2 ya no reconstruye, solo afila. Pagar 16x por afilar no sale.\n\n## SeedVR2\nDifusion de **un solo paso**: ~0.1-0.2 s/frame frente a los 2-5 s/frame de un upscaler de difusion clasico. Y es **nativo en ComfyUI** desde el PR #14424.\n\n```\nseedvr2_7b_sharp_fp16.safetensors  -> models/diffusion_models/\nseedvr2_ema_vae_fp16.safetensors   -> models/vae/\n```\n\n## Ajustes concretos para 4K\n- **Dos pasadas**: primero a **1080p**, y esa salida limpia a **2160p**. Una sola pasada de 1152 a 2160 da peor resultado que dos escalones.\n- La resolucion que pides se aplica al **lado corto**: pon `2160` y con 16:9 sale 3840x2160.\n- **batch_size 25 minimo**, 40-50 para calidad buena. Por debajo de 25 la coherencia temporal se rompe.\n- Color correction en **`lab`**.\n- En L40S/H100 no necesitas BlockSwap. Si vas justo: `block_to_swap 16`, luego 24, y 36 como ultimo recurso.\n\n## Donde engancharlo\nLa salida del nodo **ENTREGA EXACTA**. Ponlo a 1920 de ancho en el selector de resolucion (entrega `1080p`), y que SeedVR2 haga los dos escalones hasta 4K.\n\n## El aviso honesto\nHay usuarios que reportan que **SeedVR2 empeora los artefactos** de material generado por IA y no conserva bien los detalles pequenos. Tu material es render 3D limpio, que es su terreno bueno, pero **haz la prueba con un chunk antes de meterlo en produccion**. Si te pasa eso, la alternativa es reactivar la etapa x4 de LTX (interruptor `4k`) y asumir el coste."
       ]
     }
   ],
@@ -3903,30 +4127,6 @@
       "IMAGE"
     ],
     [
-      93,
-      60,
-      0,
-      37,
-      4,
-      "IMAGE"
-    ],
-    [
-      94,
-      60,
-      0,
-      47,
-      0,
-      "IMAGE"
-    ],
-    [
-      95,
-      60,
-      0,
-      50,
-      0,
-      "IMAGE"
-    ],
-    [
       96,
       45,
       2,
@@ -3981,14 +4181,6 @@
       63,
       3,
       "LATENT"
-    ],
-    [
-      103,
-      61,
-      0,
-      63,
-      4,
-      "IMAGE"
     ],
     [
       104,
@@ -4155,6 +4347,94 @@
       72,
       0,
       53,
+      0,
+      "IMAGE"
+    ],
+    [
+      125,
+      59,
+      0,
+      37,
+      4,
+      "IMAGE"
+    ],
+    [
+      126,
+      59,
+      0,
+      63,
+      4,
+      "IMAGE"
+    ],
+    [
+      127,
+      56,
+      0,
+      76,
+      0,
+      "IMAGE"
+    ],
+    [
+      128,
+      57,
+      6,
+      76,
+      1,
+      "INT"
+    ],
+    [
+      129,
+      57,
+      7,
+      76,
+      2,
+      "INT"
+    ],
+    [
+      130,
+      76,
+      0,
+      50,
+      0,
+      "IMAGE"
+    ],
+    [
+      131,
+      76,
+      0,
+      47,
+      0,
+      "IMAGE"
+    ],
+    [
+      132,
+      76,
+      0,
+      77,
+      0,
+      "IMAGE"
+    ],
+    [
+      133,
+      72,
+      0,
+      77,
+      1,
+      "IMAGE"
+    ],
+    [
+      134,
+      77,
+      3,
+      78,
+      0,
+      "STRING"
+    ],
+    [
+      135,
+      77,
+      0,
+      79,
       0,
       "IMAGE"
     ]

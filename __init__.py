@@ -8,6 +8,7 @@ API V3 (ComfyUI >= 0.23). Requiere `comfy_api.latest`.
 from comfy_api.latest import ComfyExtension, io
 
 from .comfy_character_pipeline.guards import MaskGuard, BatchMatch
+from .comfy_character_pipeline.abdiff import ABDiff
 from .comfy_character_pipeline.geometry import SnapResolution, VideoChunk
 from .comfy_character_pipeline.ltx_res import LTXResolution
 from .comfy_character_pipeline.sampling import SigmasDenoise
@@ -31,6 +32,7 @@ NODES = [
     # guardas
     MaskGuard,
     BatchMatch,
+    ABDiff,
     # geometria
     LTXResolution,
     SnapResolution,
