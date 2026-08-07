@@ -1,8 +1,8 @@
 {
   "id": "bf49d1f9-dbc2-44fd-8134-5387b6bc0575",
   "revision": 0,
-  "last_node_id": 81,
-  "last_link_id": 135,
+  "last_node_id": 88,
+  "last_link_id": 144,
   "nodes": [
     {
       "id": 3,
@@ -1724,7 +1724,7 @@
           "name": "image",
           "type": "IMAGE",
           "links": [
-            119
+            138
           ]
         }
       ],
@@ -3140,7 +3140,7 @@
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 119
+          "link": 144
         },
         {
           "name": "width",
@@ -3474,6 +3474,306 @@
       "bgcolor": "#355",
       "widgets_values": [
         "# Mi recomendacion: SeedVR2\n\nLa etapa x4 de LTX queda **en bypass**. Razones con numeros:\n\n## Coste\nLa atencion es O(n^2) sobre los tokens. La etapa x4 tiene **4 veces** los pixeles de la x2, o sea **~16 veces** su coste de atencion — para darte **2 pasos** de refinado sobre algo ya refinado. Es la peor relacion coste/beneficio del flujo.\n\n## Que hace realmente el upscaler espacial\nReportado por la comunidad: *sharpens and refines but doesn't correct structural problems*. A partir de la etapa x2 ya no reconstruye, solo afila. Pagar 16x por afilar no sale.\n\n## SeedVR2\nDifusion de **un solo paso**: ~0.1-0.2 s/frame frente a los 2-5 s/frame de un upscaler de difusion clasico. Y es **nativo en ComfyUI** desde el PR #14424.\n\n```\nseedvr2_7b_sharp_fp16.safetensors  -> models/diffusion_models/\nseedvr2_ema_vae_fp16.safetensors   -> models/vae/\n```\n\n## Ajustes concretos para 4K\n- **Dos pasadas**: primero a **1080p**, y esa salida limpia a **2160p**. Una sola pasada de 1152 a 2160 da peor resultado que dos escalones.\n- La resolucion que pides se aplica al **lado corto**: pon `2160` y con 16:9 sale 3840x2160.\n- **batch_size 25 minimo**, 40-50 para calidad buena. Por debajo de 25 la coherencia temporal se rompe.\n- Color correction en **`lab`**.\n- En L40S/H100 no necesitas BlockSwap. Si vas justo: `block_to_swap 16`, luego 24, y 36 como ultimo recurso.\n\n## Donde engancharlo\nLa salida del nodo **ENTREGA EXACTA**. Ponlo a 1920 de ancho en el selector de resolucion (entrega `1080p`), y que SeedVR2 haga los dos escalones hasta 4K.\n\n## El aviso honesto\nHay usuarios que reportan que **SeedVR2 empeora los artefactos** de material generado por IA y no conserva bien los detalles pequenos. Tu material es render 3D limpio, que es su terreno bueno, pero **haz la prueba con un chunk antes de meterlo en produccion**. Si te pasa eso, la alternativa es reactivar la etapa x4 de LTX (interruptor `4k`) y asumir el coste."
+      ]
+    },
+    {
+      "id": 82,
+      "type": "SeedVR2TorchCompileSettings",
+      "pos": [
+        3950,
+        0
+      ],
+      "size": [
+        400,
+        190
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "TORCH_COMPILE_ARGS",
+          "type": "TORCH_COMPILE_ARGS",
+          "links": [
+            136,
+            137
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SeedVR2TorchCompileSettings"
+      },
+      "widgets_values": [
+        "inductor",
+        "default",
+        false,
+        false,
+        64,
+        128
+      ],
+      "title": "Torch compile  #sw:seedvr2"
+    },
+    {
+      "id": 83,
+      "type": "SeedVR2LoadDiTModel",
+      "pos": [
+        3950,
+        230
+      ],
+      "size": [
+        400,
+        220
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "torch_compile_args",
+          "type": "TORCH_COMPILE_ARGS",
+          "link": 136
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SEEDVR2_DIT",
+          "type": "SEEDVR2_DIT",
+          "links": [
+            139,
+            142
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SeedVR2LoadDiTModel"
+      },
+      "widgets_values": [
+        "seedvr2_ema_3b_fp16.safetensors",
+        "cuda:0",
+        0,
+        false,
+        "cpu",
+        true,
+        "sdpa"
+      ],
+      "title": "SeedVR2 DiT — 3B fp16, sin swap  #sw:seedvr2"
+    },
+    {
+      "id": 84,
+      "type": "SeedVR2LoadVAEModel",
+      "pos": [
+        3950,
+        480
+      ],
+      "size": [
+        400,
+        300
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "torch_compile_args",
+          "type": "TORCH_COMPILE_ARGS",
+          "link": 137
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SEEDVR2_VAE",
+          "type": "SEEDVR2_VAE",
+          "links": [
+            140,
+            143
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SeedVR2LoadVAEModel"
+      },
+      "widgets_values": [
+        "ema_vae_fp16.safetensors",
+        "cuda:0",
+        false,
+        1024,
+        128,
+        false,
+        768,
+        128,
+        "false",
+        "cpu",
+        true
+      ],
+      "title": "SeedVR2 VAE — sin tiling  #sw:seedvr2"
+    },
+    {
+      "id": 85,
+      "type": "SeedVR2VideoUpscaler",
+      "pos": [
+        4390,
+        230
+      ],
+      "size": [
+        400,
+        330
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 138
+        },
+        {
+          "name": "dit",
+          "type": "SEEDVR2_DIT",
+          "link": 139
+        },
+        {
+          "name": "vae",
+          "type": "SEEDVR2_VAE",
+          "link": 140
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            141
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SeedVR2VideoUpscaler"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        1080,
+        0,
+        49,
+        true,
+        "lab",
+        5,
+        0,
+        0,
+        0,
+        "cpu",
+        false
+      ],
+      "title": "SeedVR2 — escalon 1: 1080  #sw:seedvr2"
+    },
+    {
+      "id": 86,
+      "type": "SeedVR2VideoUpscaler",
+      "pos": [
+        4390,
+        590
+      ],
+      "size": [
+        400,
+        330
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 141
+        },
+        {
+          "name": "dit",
+          "type": "SEEDVR2_DIT",
+          "link": 142
+        },
+        {
+          "name": "vae",
+          "type": "SEEDVR2_VAE",
+          "link": 143
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            144
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SeedVR2VideoUpscaler"
+      },
+      "widgets_values": [
+        42,
+        "fixed",
+        2160,
+        0,
+        25,
+        true,
+        "lab",
+        5,
+        0,
+        0,
+        0,
+        "cpu",
+        false
+      ],
+      "title": "SeedVR2 — escalon 2: 2160  #sw:seedvr2"
+    },
+    {
+      "id": 87,
+      "type": "MarkdownNote",
+      "pos": [
+        4830,
+        0
+      ],
+      "size": [
+        540,
+        980
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "SeedVR2 — por que estos valores exactos",
+      "properties": {},
+      "color": "#243",
+      "bgcolor": "#355",
+      "widgets_values": [
+        "# Ajustes, uno por uno\n\n## El modelo: 3B fp16, no el 7B\nContraintuitivo con 96 GB, pero el usuario mas veterano del hilo de comparativas lo dice claro tras meses de uso: **el 3B da la mejor calidad**. El 7B no compensa. Y en fp16 en vez de GGUF porque te sobra VRAM: sin perdida de cuantizacion.\n\n## blocks_to_swap = 0\nEl block swap mueve bloques a RAM para caber en tarjetas pequenas. Con 96 GB es puro coste. En una tarjeta de 8-12 GB irias a 16, luego 24, y 36 como ultimo recurso.\n\n## cache_model = True (DiT y VAE)\nDeja los modelos residentes entre ejecuciones. Es la ganancia de tiempo mas grande al iterar, y solo se puede permitir con VRAM de sobra.\n\n## Tiling del VAE: DESACTIVADO\nCon 96 GB no hace falta trocear, y cada tile es una costura potencial. En tarjetas pequenas se activa con 1024/128 al codificar y 768/128 al decodificar.\n\n## Dos escalones, no uno\nDocumentado: una sola pasada de 1152 a 2160 sale peor que **1152 -> 1080 -> 2160**. El modelo reconstruye mejor en saltos moderados. Por eso hay dos nodos y no uno.\n\n## resolution: se aplica al LADO CORTO\nPones `2160` y con 16:9 sale 3840x2160. No pongas el ancho.\n\n## batch_size 49 y luego 25\nPor debajo de 25 la coherencia temporal se rompe. 40-50 es el rango de calidad buena. En el escalon 2 se baja a 25 porque los frames son 4 veces mas grandes.\n\nSon **frames por ventana**, no un lote de trabajos: cuantos frames ve el modelo a la vez para mantener la coherencia.\n\n## temporal_overlap = 5\nSolape entre ventanas. Sin el se ve un salto cada 49 frames.\n\n## color_correction = lab\nCorreccion perceptual. Evita la deriva de color entre ventanas.\n\n## attention_mode = sdpa\nEl seguro. Si tu instalacion tiene sage compilado, cambialo a **sage**: arrancas ComfyUI con `--use-sage-attention`, asi que lo tienes.\n\n## Torch compile en bypass\nCompilar cuesta 1-3 minutos la primera vez y luego da un 10-25%. Solo compensa si vas a procesar muchos trozos seguidos. Enciendelo entonces.\n\n## El aviso\nSeedVR2 rinde mal con material **ya reescalado artificialmente**: si le das un pseudo-4K que venia de 360p, hay que bajarlo a su resolucion real primero. Tu material es render 3D nativo, asi que no te afecta — pero no le enchufes nunca la salida de otro upscaler."
+      ]
+    },
+    {
+      "id": 88,
+      "type": "MarkdownNote",
+      "pos": [
+        4830,
+        1010
+      ],
+      "size": [
+        540,
+        620
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Por que SeedVR2 y no las alternativas",
+      "properties": {},
+      "color": "#243",
+      "bgcolor": "#355",
+      "widgets_values": [
+        "# La comparativa, con numeros\n\nDe un hilo de comparacion directa entre los cuatro que importan hoy:\n\n| modelo | velocidad | veredicto |\n|---|---|---|\n| **SeedVR2** | 1.02 fps | **mejor conservacion de detalle, fiel al original** |\n| FlashVSR | 1.12 fps | el mas rapido, pero **inestable**: deforma ojos, pelo y dientes |\n| Topaz SLS 4.5x | 0.6 fps | bueno limpiando artefactos, pero **caras artificiales** |\n| Topaz SLM | 0.5 fps | mismos problemas de cara |\n\nCita del hilo sobre SeedVR2: *\"quite faithful... perhaps the most precise upscaling... never seen this precise before\"*.\n\nPara personajes 3D con identidad que hay que respetar, **fidelidad gana a velocidad**. FlashVSR deformando ojos es exactamente lo que no te puedes permitir.\n\n## RTX Video Super Resolution\nNo sirve aqui. Es una funcion **a nivel de driver** para reproduccion en tiempo real (navegadores, reproductores), no un nodo de ComfyUI, y esta pensada para ver video, no para renderizar entregas. No hay forma de meterla en el flujo.\n\n## Lo que SI aprovecha tu 6000 Pro\n1. **cache_model** en DiT y VAE\n2. **blocks_to_swap 0** y **tiling desactivado**\n3. **batch_size alto** (49): mas frames por ventana = mejor coherencia temporal\n4. **fp16** en vez de GGUF cuantizado\n5. **SageAttention** si esta compilado\n\nNada de eso es posible en una tarjeta de 24 GB."
       ]
     }
   ],
@@ -4303,14 +4603,6 @@
       "LATENT"
     ],
     [
-      119,
-      47,
-      0,
-      72,
-      0,
-      "IMAGE"
-    ],
-    [
       120,
       57,
       6,
@@ -4435,6 +4727,78 @@
       77,
       0,
       79,
+      0,
+      "IMAGE"
+    ],
+    [
+      136,
+      82,
+      0,
+      83,
+      0,
+      "TORCH_COMPILE_ARGS"
+    ],
+    [
+      137,
+      82,
+      0,
+      84,
+      0,
+      "TORCH_COMPILE_ARGS"
+    ],
+    [
+      138,
+      47,
+      0,
+      85,
+      0,
+      "IMAGE"
+    ],
+    [
+      139,
+      83,
+      0,
+      85,
+      1,
+      "SEEDVR2_DIT"
+    ],
+    [
+      140,
+      84,
+      0,
+      85,
+      2,
+      "SEEDVR2_VAE"
+    ],
+    [
+      141,
+      85,
+      0,
+      86,
+      0,
+      "IMAGE"
+    ],
+    [
+      142,
+      83,
+      0,
+      86,
+      1,
+      "SEEDVR2_DIT"
+    ],
+    [
+      143,
+      84,
+      0,
+      86,
+      2,
+      "SEEDVR2_VAE"
+    ],
+    [
+      144,
+      86,
+      0,
+      72,
       0,
       "IMAGE"
     ]
