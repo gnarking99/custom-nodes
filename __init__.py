@@ -11,7 +11,9 @@ from .comfy_character_pipeline.guards import MaskGuard, BatchMatch
 from .comfy_character_pipeline.abdiff import ABDiff
 from .comfy_character_pipeline.geometry import SnapResolution, VideoChunk
 from .comfy_character_pipeline.ltx_res import LTXResolution
+from .comfy_character_pipeline.ltx_gen import LTXGenPlan
 from .comfy_character_pipeline.sampling import SigmasDenoise
+from .comfy_character_pipeline.ltx_sigmas import LTXSigmas
 from .comfy_character_pipeline.profile import CharacterProfile
 from .comfy_character_pipeline.canon import CanonPanelBuilder, PromptTemplate
 from .comfy_character_pipeline.lora_meta import LoraTriggerReader
@@ -35,10 +37,12 @@ NODES = [
     ABDiff,
     # geometria
     LTXResolution,
+    LTXGenPlan,
     SnapResolution,
     VideoChunk,
     # muestreo
     SigmasDenoise,
+    LTXSigmas,
     # canon
     CanonPanelBuilder,
     PromptTemplate,

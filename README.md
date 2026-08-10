@@ -103,6 +103,33 @@ Y sobre todo: **la instrucción y el número de paneles tienen que ir sincroniza
 
 > El filtro anti-alucinación es el motivo de usar varias muestras: una generación es una *muestra*, no una especificación. Si una saca cuatro dedos por accidente, exigir coincidencia entre todas lo descarta.
 
+### `LTX Gen Plan` — geometría
+El selector de **generación** en LTX-2.3: eliges modo, entrega y duración, y sale todo lo demás.
+
+**El problema:** en un flujo de generación de LTX hay tres números que se escriben a mano en seis sitios y que, si no cuadran, **no dan error** — dan un vídeo deformado o un fallo raro a mitad de cola.
+
+1. **La resolución base no es la entrega.** La etapa 1 genera a la mitad y el upscaler latente dobla. Poner la entrega en `EmptyLTXVLatentVideo` cuadruplica el coste del paso lento y saca al upscaler de su rango.
+2. **`frames` tiene que ser 8n+1** — el VAE comprime 8× en el eje temporal — pero sale de duración × fps, que son los dos números que el artista sí quiere tocar. 5 s × 24 fps = 120, y lo válido de al lado es 121.
+3. **El modo decide qué ramas del grafo están vivas.** Las salidas booleanas se cablean a los `bypass` y a los switches de grupo: cambiar de t2v a ref2v es mover **un** desplegable.
+
+Dos detalles que evitan fallos concretos:
+
+- **`bypass_imagen` está invertida a propósito.** `LTXVImgToVideoInplace` tiene una entrada llamada `bypass`, no `enable`. Cablear la booleana correcta evita el clásico *"he puesto i2v y me sigue ignorando la imagen"*.
+- **Hay dos salidas de fps, `fps` (INT) y `fps_f` (FLOAT)**, porque LTX las pide de los dos tipos en el mismo flujo: `LTXVEmptyLatentAudio` quiere INT y `LTXVConditioning` / `CreateVideo` quieren FLOAT. Dos primitivas separadas es justo el duplicado que desincroniza el audio cuando cambias una y olvidas la otra.
+
+> Es el hermano de `LTX Resolution`, que hace lo mismo para **v2v** (parte de un vídeo existente). Este parte de la nada.
+
+### `LTX Sigmas` — muestreo
+Las curvas de sigmas de LTX-2.3 en un desplegable, cada una **con su procedencia escrita**.
+
+**El problema:** LTX-2.3 no usa `steps` + `denoise`, usa una lista explícita. Las listas viajan por los foros como cadenas sueltas, sin decir a qué etapa pertenecen ni de dónde salieron. En un flujo de dos etapas hay dos `ManualSigmas` con listas parecidas y acabas cambiando la equivocada.
+
+Trae la curva oficial de las plantillas de Comfy-Org y Lightricks, la de **movimiento + LoRA** que la comunidad usa cuando el personaje sale bien pero se queda quieto, y las colas de la segunda etapa.
+
+`inicio` reescala la curva entera para que arranque donde digas **conservando su forma** y el 0.0 final. Es la palanca de fidelidad de la etapa 2: es preferible a cambiar de sampler, porque un solver de segundo orden en la segunda pasada suele salir duro y lo correcto es bajar la sigma de arranque.
+
+Y rompe ruidosamente si la curva no es estrictamente decreciente: un valor que sube da salidas ruidosas **sin ningún mensaje de error**.
+
 ### `Prompt Template` — texto
 Plantilla con variables con nombre y limpieza de huecos.
 
@@ -161,9 +188,20 @@ profiles/
 
 ```bash
 python tests/test_logic.py
+python tests/test_meta.py
+python tests/test_res.py
+python tests/test_gen.py
 ```
 
-Prueba la lógica pura de `PromptTemplate`, `VideoChunk` y `SnapResolution` **sin necesitar ComfyUI** (stubbea `comfy_api`). 19 comprobaciones. Úsalo antes de cada push.
+Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (26 comprobaciones: frames 8n+1, múltiplos, techo de megapíxeles, booleanas de rama, monotonía y reescalado de las curvas). Úsalos antes de cada push.
+
+## Generador de flujos
+
+```bash
+python tools/build_ltx_gen.py
+```
+
+Genera `LTX23 GEN t2v-i2v-ref2v.json`. Un flujo de ComfyUI guarda cada enlace **tres veces** (en `links`, en `outputs[].links` del origen y en `inputs[].link` del destino); editarlo a mano deja incoherencias que aparecen a mitad de una cola de 20 minutos. Las firmas de nodo salen de `tools/ltx_node_shapes.json`, extraído de las plantillas oficiales de Comfy-Org y Lightricks, y el script valida tipos, slots, entradas obligatorias sueltas y solapes antes de escribir.
 
 Para probar los 8 nodos dentro de ComfyUI, carga `example_workflows/lab_all_nodes.json`: no requiere ningún modelo.
 
