@@ -130,6 +130,23 @@ Trae la curva oficial de las plantillas de Comfy-Org y Lightricks, la de **movim
 
 Y rompe ruidosamente si la curva no es estrictamente decreciente: un valor que sube da salidas ruidosas **sin ningún mensaje de error**.
 
+### `Wan Gen Plan` — geometría
+El equivalente de `LTX Gen Plan` para Wan 2.2, con una diferencia que lo cambia todo: **el troceado en tandas de 81**.
+
+**El problema:** Wan 2.2 se entrenó con clips de 81 frames a 16 fps. Pasarse **no da error** — el vídeo entra en bucle o pierde coherencia. Los clips largos se hacen generando tandas y encadenándolas, y ahí hay cuatro cuentas que se hacen mal:
+
+1. **Pedir más de 81 de una vez.** El nodo tapa la longitud y te dice cuántas tandas hacen falta.
+2. **`length` tiene que ser 4n+1.** 80 no vale, 81 sí. Y 5 s × 16 fps = 80, así que el redondeo va al más cercano, no hacia abajo: lo que quieres ahí es 81, el número canónico de Wan.
+3. **Resolución múltiplo de 16.**
+4. **El solape se cuenta dos veces.** Con tandas de 81 y solape 16, cada tanda aporta **65 frames nuevos**. Cuatro tandas no son 20 s, son 16.3 s.
+
+### `Wan High/Low Split` — muestreo
+Parte la curva de sigmas en el punto donde Wan 2.2 cambia de experto.
+
+**El problema:** Wan 2.2 es MoE y el traspaso de high-noise a low-noise no va por la mitad de los pasos, va a una **sigma** concreta: **0.9 en I2V, 0.875 en T2V**. Pero el paso en el que cae esa sigma depende del `shift`, del scheduler y del número de pasos. Cambias el shift de 5 a 8 y el paso correcto se mueve; `SplitSigmas` del core sigue cortando donde lo dejaste. No da error: te quedas muestreando con el experto equivocado en parte de la curva, y el síntoma —movimiento pobre, identidad que se va— parece un problema de LoRA.
+
+Este nodo busca el corte por ti y expone dónde ha caído y con cuántos pasos a cada lado, para verlo antes de lanzar. El reparto **no sale 50/50** y eso es lo correcto: con shift 5 y 20 pasos, la sigma 0.9 cae hacia el paso 7.
+
 ### `Prompt Template` — texto
 Plantilla con variables con nombre y limpieza de huecos.
 
@@ -191,17 +208,19 @@ python tests/test_logic.py
 python tests/test_meta.py
 python tests/test_res.py
 python tests/test_gen.py
+python tests/test_wan.py
 ```
 
-Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (26 comprobaciones: frames 8n+1, múltiplos, techo de megapíxeles, booleanas de rama, monotonía y reescalado de las curvas). Úsalos antes de cada push.
+Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). Úsalos antes de cada push.
 
 ## Generador de flujos
 
 ```bash
 python tools/build_ltx_gen.py
+python tools/build_wan_gen.py
 ```
 
-Genera `LTX23 GEN t2v-i2v-ref2v.json`. Un flujo de ComfyUI guarda cada enlace **tres veces** (en `links`, en `outputs[].links` del origen y en `inputs[].link` del destino); editarlo a mano deja incoherencias que aparecen a mitad de una cola de 20 minutos. Las firmas de nodo salen de `tools/ltx_node_shapes.json`, extraído de las plantillas oficiales de Comfy-Org y Lightricks, y el script valida tipos, slots, entradas obligatorias sueltas y solapes antes de escribir.
+Generan `LTX23 GEN t2v-i2v-ref2v.json` y `WAN22 GEN t2v-i2v-ref2v.json`. Un flujo de ComfyUI guarda cada enlace **tres veces** (en `links`, en `outputs[].links` del origen y en `inputs[].link` del destino); editarlo a mano deja incoherencias que aparecen a mitad de una cola de 20 minutos. Las firmas de nodo salen de `tools/ltx_node_shapes.json` y `tools/wan_node_shapes.json`, extraídos de las plantillas oficiales de Comfy-Org y Lightricks, y el script valida tipos, slots, entradas obligatorias sueltas y solapes antes de escribir.
 
 Para probar los 8 nodos dentro de ComfyUI, carga `example_workflows/lab_all_nodes.json`: no requiere ningún modelo.
 
