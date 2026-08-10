@@ -14,6 +14,7 @@ extraer y se regenera.
 
 import json
 import os
+import re
 from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -126,8 +127,13 @@ def add(ntype, widgets=None, title=None, mode=0, stage="misc", size=None):
         "inputs": json.loads(json.dumps(shape["inputs"])),
         "outputs": json.loads(json.dumps(shape["outputs"])),
         "properties": dict(shape.get("properties") or {}),
-        "widgets_values": widgets if widgets is not None else shape.get("widgets_values"),
     }
+    # Los nodos sin widgets NO llevan la clave. Las plantillas oficiales la
+    # omiten, y el esquema zod del frontend / ComfyDeploy espera array u objeto:
+    # un `"widgets_values": null` se rechaza al cargar.
+    wv = widgets if widgets is not None else shape.get("widgets_values")
+    if wv is not None:
+        n["widgets_values"] = wv
     n["properties"].setdefault("Node name for S&R", ntype)
     if title:
         n["title"] = title
@@ -190,7 +196,7 @@ plan = add("CP_LTXGenPlan",
            ["i2v · imagen inicial", "vertical 1080x1920 (9:16)", "x2 · dos pasadas",
             "64 (recomendado con LoRA)", 5.0, 24, 0.60],
            title="PLAN — empieza por aqui", stage="panel", size=[420, 260])
-plan_prev = add("PreviewAny", [None, None, None], title="plan · resumen", stage="panel",
+plan_prev = add("PreviewAny", [], title="plan · resumen", stage="panel",
                 size=[420, 260])
 wire(plan, "resumen", plan_prev, "source")
 
@@ -198,7 +204,7 @@ sig1 = add("CP_LTXSigmas", ["1 · oficial 8 pasos", 0.0, "", 20],
            title="SIGMAS etapa 1", stage="panel", size=[400, 180])
 sig2 = add("CP_LTXSigmas", ["2 · oficial 3 pasos", 0.0, "", 20],
            title="SIGMAS etapa 2", stage="panel", size=[400, 180])
-sig_prev = add("PreviewAny", [None, None, None], title="sigmas etapa 1 · de donde sale",
+sig_prev = add("PreviewAny", [], title="sigmas etapa 1 · de donde sale",
                stage="panel", size=[400, 300])
 wire(sig1, "procedencia", sig_prev, "source")
 
@@ -887,8 +893,20 @@ STAGE_RANK = {s: i for i, (s, _, _) in enumerate(STAGE_ORDER)}
 for n in GRAPH:
     n["order"] = STAGE_RANK.get(STAGE_OF[n["id"]], 99) * 1000 + n["id"]
 
+# Posiciones y tamanos a enteros: los flotantes que salen de la aritmetica del
+# layout son validos pero ensucian el diff cuando se regenera el flujo.
+for n in nodes:
+    n["pos"] = [round(v) for v in n["pos"]]
+    n["size"] = [round(v) for v in n["size"]]
+for g in groups:
+    g["bounding"] = [round(v) for v in g["bounding"]]
+
 wf = {
-    "id": "ltx23-gen-t2v-i2v-ref2v",
+    # El `id` del flujo tiene que ser un UUID: el esquema zod del frontend y de
+    # ComfyDeploy lo validan, y un slug legible se rechaza con "Invalid uuid at
+    # id". Va fijo, no generado: si cambia en cada regeneracion, ComfyDeploy lo
+    # trata como un flujo distinto y pierdes el historial de despliegues.
+    "id": "fbbb2f99-e6a9-4240-a25e-3374cbc216f2",
     "revision": 0,
     "last_node_id": _state["nid"],
     "last_link_id": _state["lid"],
@@ -897,7 +915,8 @@ wf = {
     "groups": groups,
     "config": {},
     "extra": {
-        "ds": {"scale": 0.5, "offset": [120, 140]},   # abre encima del PANEL
+        "ds": {"scale": 0.5, "offset": [120.0, 140.0]},   # abre encima del PANEL
+        "frontendVersion": "1.44.19",
         "groupNodes": {},
         "VHS_latentpreview": True,
         "VHS_latentpreviewrate": 8,
@@ -910,6 +929,23 @@ wf = {
 # VALIDACION
 # ==========================================================================
 errs = []
+
+if not re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                str(wf.get("id")), re.I):
+    errs.append(f"el `id` del flujo no es un UUID: {wf.get('id')!r}")
+
+# Nulos donde el esquema espera array/objeto o nada. Cada uno de estos se
+# manifiesta como "Invalid workflow against zod schema" al cargar, sin decir
+# que nodo lo causa.
+for n in nodes:
+    if "widgets_values" in n and n["widgets_values"] is None:
+        errs.append(f"{n['type']} [{n['id']}]: widgets_values = null (omite la clave)")
+    if n.get("title") is None and "title" in n:
+        errs.append(f"{n['type']} [{n['id']}]: title = null")
+    for o in n["outputs"]:
+        if o.get("links") is None:
+            o["links"] = []
+
 by = {n["id"]: n for n in nodes}
 seen = set()
 for lid, on, osl, tn, tsl, ty in links:
