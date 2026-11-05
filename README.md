@@ -154,6 +154,23 @@ Plantilla con variables con nombre y limpieza de huecos.
 
 Además entiende la respuesta `no changes` del VLM: elimina la variable en vez de escribirla, y expone `has_changes` para poder saltarse el pase entero.
 
+### Blocking a animación — `Poses · Detectar`, `Poses · Guía sin esperas`, `Poses · Claves para fijar`, `Poses · Componer sobre la placa`, `LTX · Fijar poses`
+Las piezas de la tarjeta LTX25 BLOCKING A ANIMACIÓN de BITT: un blocking a saltos (poses con esperas) pasa a animación suave con LTX 2.5.
+
+**El problema:** si le das a un modelo de vídeo el blocking tal cual como guía, copia los saltos aunque el prompt pida lo contrario. Hay que quitar las esperas antes, y hacerlo bien tiene tres trampas medidas (ANI_BUFFET s097, blocking de 25 poses en 77 f):
+
+1. **El interpolador.** FILM desgarra al personaje en los saltos grandes (brazos rotos, antenas fantasma) y el modelo copia el desgarro. RIFE 4.26 a 544 de alto lo deja limpio.
+2. **Los fps.** LTX comprime 8 fotogramas en cada paso latente: a 24 fps un giro rápido cabe entero en uno y sale emborronado. Con el guía al doble de fps y quedándose con uno de cada dos, la cara aguanta.
+3. **El decorado de las poses fijadas.** Si Klein pinta cada pose con el decorado, se inventa uno distinto en cada una. Se pintan sobre el telón liso del playblast y se componen sobre una placa única.
+
+- `Poses · Detectar` saca una imagen por pose, el mapa de tiempos y el factor de intermedios (12 reparte exacto saltos de 2, 3, 4, 6 y 12 fotogramas).
+- `Poses · Guía sin esperas` recoloca los intermedios en los tiempos del blocking: cada pose cae en su fotograma. Con `subpasos` 2 sale al doble de fps, y lo rellena a 8k+1 para LTX.
+- `Poses · Claves para fijar` elige las poses que se fijan: la primera, la última y las más cercanas a un reparto uniforme. 6 bastan; 25 no mejoran y tardan el doble.
+- `Poses · Componer sobre la placa` recorta cada pose de su telón liso (polinomio de grado 3 por canal) y la pone sobre la placa con una sombra de contacto corta. Una sombra ancha en la primera pose se quedaba pegada al suelo.
+- `LTX · Fijar poses` llama a `LTXAddVideoICLoRAGuide` de ComfyUI-LTXVideo para cada pose, en un bucle: el número de poses no es fijo.
+
+`Poses · Montar` es de otra receta (texturas sin tocar el movimiento) y está aparcado: su montaje llegó a tardar 39 min sin diagnosticar.
+
 ---
 
 ## Instalación
@@ -163,7 +180,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/gnarking99/custom-nodes.git comfyui-character-pipeline
 ```
 
-Requiere **ComfyUI ≥ 0.23** (API de nodos V3). Sin dependencias más allá de las que ya trae ComfyUI (`torch`, `numpy`, `Pillow`).
+Requiere **ComfyUI ≥ 0.23** (API de nodos V3). Usa `torch`, `numpy` y `Pillow`, que ya trae ComfyUI, y `scipy` para los nodos de poses (máscaras y sombras). `LTX · Fijar poses` necesita además ComfyUI-LTXVideo.
 
 ## Perfiles: ¿hace falta un JSON por LoRA?
 
@@ -209,9 +226,11 @@ python tests/test_meta.py
 python tests/test_res.py
 python tests/test_gen.py
 python tests/test_wan.py
+python tests/test_blocking.py
+python tests/test_poses.py   # el montaje de Poses · Montar tarda mucho
 ```
 
-Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). Úsalos antes de cada push.
+Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). `test_blocking` cubre los nodos de blocking a animación con datos sintéticos (claves, composición, bucle de guías y guía al doble de fps); `test_poses`, la detección de poses, el guía sin esperas y el montaje. Úsalos antes de cada push.
 
 ## Generador de flujos
 

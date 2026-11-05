@@ -21,6 +21,8 @@ from .comfy_character_pipeline.canon import CanonPanelBuilder, PromptTemplate
 from .comfy_character_pipeline.lora_meta import LoraTriggerReader
 from .comfy_character_pipeline.artist import QualityPreset, PipelineStatus
 from .comfy_character_pipeline.panel import ControlPanel
+from .comfy_character_pipeline.poses import PosesDetectar, PosesMontar, PosesSinEsperas
+from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGuiasPoses
 
 # extension de frontend: js/control_panel.js
 WEB_DIRECTORY = "./js"
@@ -50,6 +52,14 @@ NODES = [
     # canon
     CanonPanelBuilder,
     PromptTemplate,
+    # render por poses
+    PosesDetectar,
+    PosesMontar,
+    PosesSinEsperas,
+    # blocking a animacion
+    PosesClaves,
+    PosesComponer,
+    LTXGuiasPoses,
 ]
 
 
