@@ -14,6 +14,13 @@ Medido el 10-11-2026 con un blocking de 25 poses en 77 fotogramas:
 - El render en un pase a 1920x1088 esta medido hasta 177 fotogramas por ventana: de ahi el tope.
 
 Todo lo que mide movimiento lo hace a 480 px de ancho, asi los umbrales valen para cualquier resolucion.
+
+El ritmo multiplica lo que dura cada pose (inicios, total y transicion_max salen ya escalados en el plan): mas
+fotogramas de salida entre pose y pose sin que CP_LentaElegir ni CP_BlockingLento cambien. Lo que cuesta GPU son
+los lentos generados, no los de salida.
+
+Compatibilidad: sin ritmo ni mas_lentos (o con ritmo 1 y mas_lentos False) el plan es identico, byte a byte, al de
+la v0.14 para cualquier mapa; tests/test_lenta_compat_v014.py lo comprueba contra planes generados con la v0.14.
 """
 
 import json
@@ -33,6 +40,17 @@ UMBRAL_SALTO = 9.0  # px a 480 de ancho: desde aqui el salto es grande y lleva 3
 MAX_VENTANA = 177  # el mayor tamano medido a 1920x1088 en un pase
 TRANSICION_MAX = 12  # fotogramas del blocking que como mucho ocupa un salto; el resto es espera
 MAX_TOTAL = 1601  # cada ventana deja unos 9 GB de imagenes en la cache del trabajo
+# Fotogramas de salida (blocking x ritmo) como mucho cuando hay ritmo (> 1): cada uno a 1920x1088 en float32 son
+# 25 MB y CP_LentaElegir acumula el render y la guia de todo el plano (1000 fotogramas = unos 50 GB). Con ritmo 1 no
+# se comprueba: la v0.14 no tenia este tope y un blocking que aceptaba tiene que seguir aceptandolo.
+MAX_SALIDA = 1000
+MAX_RITMO = 8
+# Regla de mas lentos (solo con mas_lentos=True o ritmo > 1; sin ellos, la regla de la v0.14). Fotogramas de salida
+# de un salto hasta los que bastan 16 lentos: con 16 lentos y hasta 8 de salida hay al menos dos lentos por fotograma
+# y la eleccion por recorrido tiene margen para saltarse los tirones del modelo. Con 9 a 16 de salida, 16 lentos ya no
+# dejan margen (con 16 se cogen todos, tirones incluidos): pasan a 32, que esta validado en GPU, y vuelve a haber el
+# doble. Hasta 8 no cambia nada.
+TRAMO_CORTO = 8
 SIN_MOVIMIENTO = 1e-6  # px: por debajo, el recorrido de un salto no dice nada
 
 
@@ -128,13 +146,14 @@ def leer_mapa(mapa, n_poses, nodo="CP_LentaPlan"):
     return [a for a, _ in bloques], bloques[-1][1] + 1
 
 
-def lentos_por_salto(saltos_px, duraciones, umbral=UMBRAL_SALTO, transicion_max=TRANSICION_MAX):
-    """Fotogramas lentos de cada salto: 32 si el salto es grande, 16 si no, y nunca menos que los fotogramas que
-    hay que sacar de el (subido al multiplo de 8, que es cada cuanto fija LTX una pose)."""
+def lentos_por_salto(saltos_px, duraciones, umbral=UMBRAL_SALTO, transicion_max=TRANSICION_MAX, mas_margen=False):
+    """Fotogramas lentos de cada salto: 32 si el salto es grande (o, con mas_margen, si hay que sacar de el mas de
+    TRAMO_CORTO fotogramas), 16 si no, y nunca menos que los fotogramas que hay que sacar de el (subido al multiplo
+    de 8, que es cada cuanto fija LTX una pose). Sin mas_margen es la regla de la v0.14."""
     lentos = []
     for px, d in zip(saltos_px, duraciones):
         m = min(d, transicion_max)
-        base = LENTOS_LARGO if px >= umbral else LENTOS_CORTO
+        base = LENTOS_LARGO if px >= umbral or (mas_margen and m > TRAMO_CORTO) else LENTOS_CORTO
         lentos.append(max(base, 8 * -(-m // 8)))
     return lentos
 
@@ -185,15 +204,17 @@ def repartir_ventanas(lentos, max_ventana=MAX_VENTANA):
     return cortes
 
 
-def armar_plan(inicios, total, saltos_px, lentos, cortes, transicion_max=TRANSICION_MAX):
-    """El plan con los lentos y los cortes ya decididos. pos[j] es el indice lento de la pose p0+j en su ventana."""
+def armar_plan(inicios, total, saltos_px, lentos, cortes, transicion_max=TRANSICION_MAX, ritmo=1, mas_lentos=False):
+    """El plan con los lentos y los cortes ya decididos. pos[j] es el indice lento de la pose p0+j en su ventana.
+    inicios, total y transicion_max van ya multiplicados por el ritmo. El ritmo solo se apunta si no es 1 y
+    mas_lentos solo si es True (asi un plan sin ellos sale igual, byte a byte, que en la v0.14)."""
     ventanas = []
     for p0, p1 in cortes:
         pos = [0]
         for x in lentos[p0:p1]:
             pos.append(pos[-1] + int(x))
         ventanas.append({"p0": int(p0), "p1": int(p1), "pos": pos, "n": pos[-1] + 1})
-    return {
+    plan = {
         "version": VERSION_PLAN,
         "inicios": [int(x) for x in inicios],
         "total": int(total),
@@ -202,18 +223,48 @@ def armar_plan(inicios, total, saltos_px, lentos, cortes, transicion_max=TRANSIC
         "transicion_max": int(transicion_max),
         "ventanas": ventanas,
     }
+    if int(ritmo) != 1:
+        plan["ritmo"] = int(ritmo)
+    if mas_lentos:
+        plan["mas_lentos"] = True
+    return plan
+
+
+def _comprobar_ritmo(ritmo, nodo):
+    try:
+        entero = _entero(ritmo)
+    except (ValueError, TypeError):
+        entero = None
+    if entero is None or not 1 <= entero <= MAX_RITMO:
+        raise ValueError(f"[{nodo}] El ritmo tiene que ser un entero de 1 a {MAX_RITMO} y llego {ritmo!r}.")
+    return entero
 
 
 def planificar(inicios, total, saltos_px, umbral=UMBRAL_SALTO, max_ventana=MAX_VENTANA,
-               transicion_max=TRANSICION_MAX, max_total=MAX_TOTAL, nodo="CP_LentaPlan"):
-    """Plan de camara lenta: lentos por salto y ventanas. Devuelve el dict que viaja como JSON entre los nodos."""
+               transicion_max=TRANSICION_MAX, max_total=MAX_TOTAL, nodo="CP_LentaPlan", ritmo=1,
+               max_salida=MAX_SALIDA, mas_lentos=False):
+    """Plan de camara lenta: lentos por salto y ventanas. Devuelve el dict que viaja como JSON entre los nodos.
+    ritmo multiplica lo que dura cada pose: el plan sale con inicios, total y transicion_max ya multiplicados.
+    La regla de mas lentos (32 si de un salto salen mas de TRAMO_CORTO fotogramas) se aplica con mas_lentos=True o
+    con ritmo > 1, y el tope de max_salida fotogramas de salida solo con ritmo > 1. Con ritmo 1 y mas_lentos False
+    el plan (y cada error) es el de la v0.14."""
     inicios = [int(x) for x in inicios]
     if len(inicios) < 2:
         raise ValueError(
             f"[{nodo}] El blocking tiene una sola pose: no hay nada que animar. "
             "Revisa que exportaste el plano correcto: tiene que haber al menos dos poses distintas."
         )
+    ritmo = _comprobar_ritmo(ritmo, nodo)
     _comprobar_tiempos(inicios, total, nodo)
+    if ritmo > 1 and int(total) * ritmo > max_salida:
+        raise ValueError(
+            f"[{nodo}] Con ritmo {ritmo} salen {int(total) * ritmo} fotogramas de salida ({int(total)} del blocking x "
+            f"{ritmo}) y con ritmo el tope es {max_salida}: baja el ritmo (con 1 no hay este tope) o parte el plano en dos. "
+            "Es por memoria: cada fotograma a 1920x1088 ocupa 25 MB y se guardan el render y la guia de todo el plano."
+        )
+    mas_lentos = bool(mas_lentos)
+    regla = mas_lentos or ritmo > 1
+    inicios, total, transicion_max = [x * ritmo for x in inicios], int(total) * ritmo, int(transicion_max) * ritmo
     if len(saltos_px) != len(inicios) - 1:
         raise ValueError(f"[{nodo}] Con {len(inicios)} poses tocan {len(inicios) - 1} saltos medidos y llegaron {len(saltos_px)}.")
     # Se redondea ANTES de clasificar: quien lea el plan saca los mismos lentos de las medidas guardadas.
@@ -221,15 +272,16 @@ def planificar(inicios, total, saltos_px, umbral=UMBRAL_SALTO, max_ventana=MAX_V
     if not all(np.isfinite(saltos)):
         raise ValueError(f"[{nodo}] La medida de algun salto no es un numero: {saltos}.")
     duraciones = [b - a for a, b in zip(inicios, inicios[1:])]
-    lentos = lentos_por_salto(saltos, duraciones, umbral, transicion_max)
+    lentos = lentos_por_salto(saltos, duraciones, umbral, transicion_max, mas_margen=regla)
     cortes = repartir_ventanas(lentos, max_ventana)
     lentos_totales = sum(lentos) + len(cortes)
     if lentos_totales > max_total:
         raise ValueError(
             f"[{nodo}] Salen {lentos_totales} fotogramas lentos en {len(cortes)} ventanas y el tope es {max_total}. "
             "El blocking es demasiado largo para una sola pasada: partelo en planos mas cortos."
+            + (f" Con ritmo {ritmo} cada pose dura {ritmo} veces mas: bajar el ritmo tambien lo arregla." if ritmo > 1 else "")
         )
-    return leer_plan(armar_plan(inicios, total, saltos, lentos, cortes, transicion_max), nodo)
+    return leer_plan(armar_plan(inicios, total, saltos, lentos, cortes, transicion_max, ritmo, mas_lentos), nodo)
 
 
 def leer_plan(texto, nodo="CP_LentaElegir"):
@@ -247,6 +299,7 @@ def leer_plan(texto, nodo="CP_LentaElegir"):
             f"[{nodo}] El plan es de la version {plan.get('version')!r} y este nodo entiende la {VERSION_PLAN}: "
             "vuelve a generarlo con CP_LentaPlan."
         )
+    crudo = plan
     try:
         plan = {
             "version": VERSION_PLAN,
@@ -260,6 +313,15 @@ def leer_plan(texto, nodo="CP_LentaElegir"):
                 for v in plan["ventanas"]
             ],
         }
+        # El ritmo es informativo (todo lo demas ya viene multiplicado) y los planes sin el son de ritmo 1.
+        if "ritmo" in crudo:
+            plan["ritmo"] = _entero(crudo["ritmo"])
+        # mas_lentos tambien es informativo (los lentos ya vienen decididos): solo se guarda si es True.
+        if "mas_lentos" in crudo:
+            if not isinstance(crudo["mas_lentos"], bool):
+                raise ValueError(f"mas_lentos tiene que ser true o false y trae {crudo['mas_lentos']!r}")
+            if crudo["mas_lentos"]:
+                plan["mas_lentos"] = True
     except (KeyError, TypeError, ValueError) as e:
         raise ValueError(f"[{nodo}] Al plan le falta un dato o lo trae mal: {e!r}.") from e
 
@@ -275,6 +337,8 @@ def leer_plan(texto, nodo="CP_LentaElegir"):
         )
     if transicion < 1:
         raise ValueError(f"[{nodo}] transicion_max tiene que ser 1 o mas y el plan trae {transicion}.")
+    if plan.get("ritmo", 1) < 1:
+        raise ValueError(f"[{nodo}] El ritmo tiene que ser 1 o mas y el plan trae {plan['ritmo']}.")
     for k, x in enumerate(lentos):
         m = min(inicios[k + 1] - inicios[k], transicion)
         if x < 8 or x % 8:
@@ -325,6 +389,30 @@ def resumir_plan(plan, max_ventana=MAX_VENTANA):
     esperas = sum(1 for a, b in zip(inicios, inicios[1:]) if b - a > transicion)
     if esperas:
         texto += f" Esperas de mas de {transicion} fotogramas: {esperas} (la pose se queda quieta y el salto ocupa los {transicion} ultimos)."
+    return texto
+
+
+def resumir_salida(plan):
+    """Lo que sale y lo que se genera, y el aviso de saltos con mas lentos de los validados en GPU (no falla)."""
+    ritmo = plan.get("ritmo", 1)
+    generados = sum(v["n"] for v in plan["ventanas"])
+    texto = f"Salida: {plan['total']} fotogramas"
+    if ritmo != 1:
+        texto += f" (ritmo {ritmo}: cada pose dura {ritmo} veces lo del blocking)"
+    texto += f" a partir de {generados} fotogramas lentos generados."
+    if ritmo != 1 or plan.get("mas_lentos"):
+        motivo = "mas_lentos" if plan.get("mas_lentos") else f"ritmo {ritmo}"
+        texto += (
+            f" Regla de mas lentos activa ({motivo}): 32 lentos en los saltos de los que salen mas de {TRAMO_CORTO} fotogramas."
+        )
+    else:
+        texto += " Regla de lentos de siempre (la de mas lentos solo con mas_lentos o ritmo > 1)."
+    largos = [x for x in plan["lentos"] if x > LENTOS_LARGO]
+    if largos:
+        texto += (
+            f" AVISO: {len(largos)} salto{'s' if len(largos) != 1 else ''} con mas de {LENTOS_LARGO} lentos (hasta {max(largos)}): "
+            f"en GPU solo estan validados {LENTOS_CORTO} y {LENTOS_LARGO}. Baja el ritmo o transicion_max si se ve raro."
+        )
     return texto
 
 
@@ -453,6 +541,18 @@ class LentaPlan(io.ComfyNode):
                     "max_total", default=MAX_TOTAL, min=65, max=8001,
                     tooltip="Tope de seguridad de fotogramas lentos en todo el plano: por encima, parte el blocking.",
                 ),
+                io.Int.Input(
+                    "ritmo", default=1, min=1, max=MAX_RITMO, optional=True,
+                    tooltip="Multiplica lo que dura cada pose (y transicion_max): mas fotogramas de salida entre pose y pose. "
+                            f"Con 1, los tiempos del blocking. Con mas de 1: tope de {MAX_SALIDA} fotogramas de salida y "
+                            "se activa la regla de mas lentos.",
+                ),
+                io.Boolean.Input(
+                    "mas_lentos", default=False, optional=True,
+                    tooltip=f"32 fotogramas lentos (no 16) en los saltos de los que salen mas de {TRAMO_CORTO} fotogramas: "
+                            "dos lentos por fotograma de salida, a cambio de mas GPU. Con ritmo > 1 se aplica siempre. "
+                            "Apagado y con ritmo 1, el plan de siempre.",
+                ),
             ],
             outputs=[
                 io.String.Output(display_name="plan"),
@@ -464,13 +564,16 @@ class LentaPlan(io.ComfyNode):
 
     @classmethod
     def execute(cls, poses, mapa, umbral=UMBRAL_SALTO, max_ventana=MAX_VENTANA, transicion_max=TRANSICION_MAX,
-                max_total=MAX_TOTAL) -> io.NodeOutput:
+                max_total=MAX_TOTAL, ritmo=1, mas_lentos=False) -> io.NodeOutput:
         if poses is None or len(poses) == 0:
             raise ValueError("[CP_LentaPlan] No llegaron poses.")
         inicios, total = leer_mapa(mapa, len(poses), "CP_LentaPlan")
         saltos = medir_saltos(poses, "CP_LentaPlan") if len(inicios) > 1 else []
-        plan = planificar(inicios, total, saltos, umbral, max_ventana, transicion_max, max_total)
-        info = resumir_plan(plan, max_ventana)
+        if ritmo is None:
+            ritmo = 1
+        plan = planificar(inicios, total, saltos, umbral, max_ventana, transicion_max, max_total, ritmo=ritmo,
+                          mas_lentos=bool(mas_lentos))
+        info = resumir_plan(plan, max_ventana) + " " + resumir_salida(plan)
         logging.info("[CP_LentaPlan] %s", info)
         return io.NodeOutput(json.dumps(plan), len(plan["ventanas"]), sum(v["n"] for v in plan["ventanas"]), info)
 

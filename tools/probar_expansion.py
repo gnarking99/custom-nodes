@@ -9,7 +9,7 @@ registran lo que reciben:
   LTXVTiledVAEDecode;
 - las fuentes (modelos, vae, escalador, conditioning, factor, poses, arte) son nodos dobles con su etiqueta.
 Son de verdad: EmptyLTXVLatentVideo, ImageFromBatch, ImageScale, KSamplerSelect, ManualSigmas, RandomNoise,
-PrimitiveString, CP_LentaPlan, CP_BlockingLento y CP_LentaElegir.
+PrimitiveString, CP_PosesDesdeFotos, CP_LentaPlan, CP_BlockingLento y CP_LentaElegir.
 
 El decodificado doble devuelve n fotogramas pequenos con un cuadrado que se mueve (para que el flujo optico mida algo)
 y una marca exacta en el pixel de abajo a la izquierda: canal 0 = indice lento / 1000, canal 1 = codigo del nodo de
@@ -25,7 +25,20 @@ Lo que se comprueba (aserciones):
 4. cache: el mismo prompt otra vez no ejecuta ningun doble; cambiando solo la semilla se vuelve a ejecutar lo que
    depende del ruido y nada de lo que no;
 5. mensajes 'executing' y 'progress_state' de los nodos efimeros (que node y display_node ve el cliente);
-6. planes invalidos: error legible en espanol como execution_error del nodo.
+6. planes invalidos: error legible en espanol como execution_error del nodo;
+7. solo_animacion: con True no se ejecuta nada de la etapa 2 y las dos salidas son el playblast elegido; sin la clave
+   (como la envia la tarjeta publicada) y con False, el mismo subgrafo y los mismos dobles que en la seccion 1;
+8. fotos: CP_PosesDesdeFotos de verdad (fotos PNG escritas en la carpeta de entrada de la carpeta de trabajo) ->
+   CP_LentaPlan con transicion_max enlazado a su salida "transicion" -> CP_BlockingLento con solo_animacion True y
+   False: salen los fotogramas que anuncia el nodo de fotos, cada pose en su fotograma (k x d) y su guia en el lento
+   que dice el plan, y entre pose y pose se mueve en todos los fotogramas;
+   La tarjeta de fotos lleva mas_lentos=True en CP_LentaPlan y aqui tambien: 32 lentos por salto con 12 por pose;
+9. ritmo 2 con el mapa de video de la seccion 1: el doble de fotogramas, cada pose en el doble de su inicio;
+10. la tarjeta publicada: el plano de control (25 poses, 77 fotogramas) con las entradas que envia su prompt a
+   CP_LentaPlan y CP_BlockingLento (sin ritmo, mas_lentos ni solo_animacion); el plan (huella sha256 del JSON) y el
+   subgrafo expandido por el motor (huella con el prefijo cambiado por '@') tienen que ser los que da la v0.14, que
+   estan en tests/datos/compat_v014.json (los genera tools/generar_compat_v014.py con una copia de la v0.14).
+Antes de nada (seccion 0) se comprueba que el pack publica sus nodos de camara lenta y de fotos con su esquema.
 
 Uso (con el Python del motor; no arranca servidor ni escribe en la carpeta del motor):
     python3 -B tools/probar_expansion.py <carpeta de ComfyUI> <carpeta de trabajo vacia o desechable>
@@ -84,9 +97,30 @@ asyncio.run(_cargar())
 print(f"motor y packs cargados en {time.time() - T0:.1f} s")
 
 M = nodes.NODE_CLASS_MAPPINGS
-for _n in ("CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir", "EmptyLTXVLatentVideo", "ImageFromBatch", "ImageScale",
-           "KSamplerSelect", "ManualSigmas", "RandomNoise", "PrimitiveString"):
+for _n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir", "EmptyLTXVLatentVideo",
+           "ImageFromBatch", "ImageScale", "KSamplerSelect", "ManualSigmas", "RandomNoise", "PrimitiveString"):
     assert _n in M, f"falta el nodo real {_n}"
+
+# ------------------------------------------------------------------------------------------------ 0: esquemas
+# lo que veria GET /object_info/<nodo> (server.py llama a GET_NODE_INFO_V1 en los nodos V3)
+print("\n== 0. el pack publica los nodos con su esquema ==")
+INFO = {n: M[n].GET_NODE_INFO_V1() for n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir")}
+for _n, _i in INFO.items():
+    _ent = list(_i["input_order"].get("required", [])) + list(_i["input_order"].get("optional", []))
+    print(f"{_n}: {len(_ent)} entradas ({len(_i['input_order'].get('optional', []))} opcionales), salidas {_i['output_name']}")
+_fo = INFO["CP_PosesDesdeFotos"]
+_casillas = [f"pose_{i:02d}" for i in range(1, 25)]
+_okfotos = (_fo["input_order"]["optional"] == _casillas
+            and _fo["input_order"]["required"] == ["fotogramas_por_pose", "espera_final", "orden"]
+            and all(_fo["input"]["optional"][c][1].get("image_upload") is True for c in _casillas)
+            and _fo["input"]["required"]["fotogramas_por_pose"][1]["max"] == 32
+            and list(_fo["output_name"]) == ["poses", "mapa", "n_poses", "transicion", "fotogramas", "fps"])
+_lp, _bl = INFO["CP_LentaPlan"], INFO["CP_BlockingLento"]
+_okplan = (_lp["input_order"]["optional"] == ["ritmo", "mas_lentos"] and _lp["input"]["optional"]["ritmo"][1]["default"] == 1
+           and _lp["input"]["optional"]["mas_lentos"][0] == "BOOLEAN" and _lp["input"]["optional"]["mas_lentos"][1]["default"] is False)
+_okbl = _bl["input_order"]["optional"] == ["solo_animacion"] and _bl["input"]["optional"]["solo_animacion"][1]["default"] is False
+print("FALLO esquemas" if not (_okfotos and _okplan and _okbl) else "ok   esquemas: 24 casillas con subida, ritmo, mas_lentos y solo_animacion opcionales")
+assert _okfotos and _okplan and _okbl, (_fo["input_order"], _lp["input_order"], _bl["input_order"])
 
 # ------------------------------------------------------------------------------------------------ registro y objetos
 REGISTRO = []  # (clase, id del nodo, datos) en orden de ejecucion
@@ -626,6 +660,301 @@ for nombre, prompt, nodo_err, prefijo in (
               f"{err and err['exception_message'].strip()}")
     pesados = [c for c, _, _ in regx if c in REALES]
     comprobar(not pesados, f"{nombre}: no se ejecuta ningun nodo pesado ({pesados})")
+
+print("\n== 7. solo animacion ==")
+
+
+def nuevo_ejecutor():
+    """Cache vacia: para ver que se ejecuta de verdad, sin nada guardado de las secciones anteriores."""
+    global EJECUTOR
+    EJECUTOR = execution.PromptExecutor(SERVIDOR, cache_type=execution.CacheType.RAM_PRESSURE,
+                                        cache_args={"lru": 0, "ram": _ram, "ram_inactive": min(128.0, comfy.model_management.total_ram / 1024.0)})
+
+
+def por_clase(registro):
+    cuenta = {}
+    for c, _, _ in registro:
+        cuenta[c] = cuenta.get(c, 0) + 1
+    return cuenta
+
+
+comprobar("solo_animacion" not in prompt_raiz()["20"]["inputs"],
+          "el prompt de las secciones 1-6 no lleva la clave solo_animacion, como el de la tarjeta publicada")
+nuevo_ejecutor()
+p_solo = prompt_raiz()
+p_solo["20"]["inputs"]["solo_animacion"] = True
+reg7, mens7, valido7 = ejecutar(p_solo, "p7")
+comprobar(EJECUTOR.success, "solo_animacion=True: execution_success " + str([e for e, _ in mens7 if e.startswith("execution_")]))
+comprobar(valido7[2] == ["30"] and p_solo["20"]["inputs"]["solo_animacion"] is True, "valida con el BOOLEAN tal cual")
+dyn7 = DINAMICOS[-1]
+ef7 = dyn7.ephemeral_prompt
+print(f"nodos efimeros: {len(ef7)} (con render: {len(efimeros)}); clases: " + ", ".join(
+    f"{c}={sum(1 for d in ef7.values() if d['class_type'] == c)}" for c in sorted({d['class_type'] for d in ef7.values()})))
+comprobar(not any(etapa_de(i) == 2 or i.endswith(".ancla") for i in ef7), "ningun nodo de la etapa 2 ni ancla en el subgrafo")
+comprobar(all(d["inputs"]["guia"] == d["inputs"]["render"] for d in ef7.values() if d["class_type"] == "CP_LentaElegir"),
+          "cada CP_LentaElegir recibe el playblast como guia y como render")
+c7 = por_clase(reg7)
+print("dobles ejecutados: " + ", ".join(f"{c} {n}" for c, n in sorted(c7.items())))
+comprobar("LTXAddVideoICLoRAGuide" not in c7, "LTXAddVideoICLoRAGuide no se ejecuta")
+m7 = [d for c, n, d in reg7 if c == "SamplerCustomAdvanced"]
+comprobar(len(m7) == 2 * len(V) and all("pose" in d["tipos_guia"] and d["modelo"] == "suave" for d in m7),
+          f"solo los {2 * len(V)} muestreos de la etapa 1, con el modelo suave ({len(m7)})")
+comprobar(all(d["modelo"] == "suave" for c, n, d in reg7 if c == "CFGGuider"), "ningun CFGGuider con el modelo de render")
+dec7 = {n: d for c, n, d in reg7 if c == "LTXVTiledVAEDecode"}
+comprobar(len(dec7) == len(V) and all(d["familia"] == "suave" for d in dec7.values()), "solo se decodifica el playblast de cada ventana")
+anim7, play7 = RECOGIDO.get("animacion"), RECOGIDO.get("playblast")
+comprobar(anim7 is not None and anim7.shape[0] == plan["total"] and play7 is not None and tuple(play7.shape) == tuple(anim7.shape),
+          f"animacion y playblast con 'total'={plan['total']} fotogramas: {None if anim7 is None else tuple(anim7.shape)}, "
+          f"{None if play7 is None else tuple(play7.shape)}")
+comprobar(anim7 is not None and torch.equal(anim7, play7), "animacion y playblast son la misma secuencia")
+cod7 = {d["codigo"]: ventana_de(n) for n, d in dec7.items()}
+seq7 = [(cod7[_marca(play7, f)[0]], _marca(play7, f)[1]) for f in range(play7.shape[0])] if play7 is not None else []
+comprobar(seq7 == seq, "eligen los mismos (ventana, indice lento) que con render (el recorrido se mide en el playblast)")
+de_arriba = {"5": "arte", "7": "modelo_render", "8": "factor_guia", "13": "positivo_render", "14": "negativo_render"}
+corridos7 = {n for _, n, _ in reg7}
+print("fuentes de arriba del render que se ejecutan con solo_animacion=True: "
+      + ", ".join(f"{nid} {papel}: {'SI' if nid in corridos7 else 'no'}" for nid, papel in de_arriba.items()))
+comprobar(all(nid in corridos7 for nid in ("1", "6", "9", "10", "11", "12")), "las fuentes de la etapa 1 se ejecutan")
+
+# sin la clave (la tarjeta publicada) y con False: lo de la seccion 1, con la cache vacia
+for nombre, prompt in (("sin la clave", prompt_raiz()), ("con False", dict(prompt_raiz()))):
+    if nombre == "con False":
+        prompt["20"] = json.loads(json.dumps(prompt["20"]))
+        prompt["20"]["inputs"]["solo_animacion"] = False
+    nuevo_ejecutor()
+    regx, mensx, _ = ejecutar(prompt, "p8_" + nombre.replace(" ", "_"))
+    efx = DINAMICOS[-1].ephemeral_prompt
+    comprobar(EJECUTOR.success, f"{nombre}: execution_success")
+    comprobar(efx == efimeros, f"{nombre}: el subgrafo es el de la seccion 1, nodo a nodo ({len(efx)} nodos)")
+    comprobar(por_clase(regx) == cuenta1, f"{nombre}: los mismos dobles y las mismas veces que en la seccion 1")
+    ax, px = RECOGIDO.get("animacion"), RECOGIDO.get("playblast")
+    comprobar(ax is not None and torch.equal(ax, anim) and torch.equal(px, play), f"{nombre}: la misma animacion y el mismo playblast")
+
+# ================================================================================================ 8: fotos
+print("\n== 8. blocking en fotos ==")
+from PIL import Image  # noqa: E402
+
+ENTRADA = os.path.join(TRABAJO, "input")
+folder_paths.set_input_directory(ENTRADA)  # la carpeta de trabajo, nunca la del motor
+os.makedirs(ENTRADA, exist_ok=True)
+comprobar(os.path.realpath(folder_paths.get_input_directory()).startswith(os.path.realpath(TRABAJO)),
+          "la carpeta de entrada esta en la de trabajo")
+N_FOTOS, D_FOTOS, ESPERA_FOTOS = 6, 12, 5
+
+
+def foto(nombre, k):
+    """Como _poses(): banda de arriba con (k+1)/20 (la lee _pose) y un cuadrado que salta; fondo liso."""
+    xs = [6, 40, 74, 7, 41, 75]
+    im = Image.new("RGB", (96, 54), (64, 64, 64))
+    im.paste((int(round((k + 1) / 20 * 255)),) * 3, (0, 0, 96, 6))
+    im.paste((230, 230, 230), (xs[k], 24, xs[k] + 14, 38))
+    im.save(os.path.join(ENTRADA, nombre))
+    return nombre
+
+
+# casillas 1-4 y 7-8 con foto (los huecos no cuentan) y la 5 con el marcador de vacio
+CASILLAS_FOTOS = dict(zip(["pose_01", "pose_02", "pose_03", "pose_04", "pose_07", "pose_08"],
+                          [foto(f"prueba_pose_{k}.png", k) for k in range(N_FOTOS)]))
+CASILLAS_FOTOS["pose_05"] = "PON-AQUI-UNA-POSE"
+
+
+class Doble_Numero:
+    """Nodo de salida: guarda un INT (la salida 'fotogramas' del nodo de fotos)."""
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    FUNCTION = "f"
+    CATEGORY = "pruebas"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"valor": ("INT", {"forceInput": True})}}
+
+    def f(self, valor):
+        RECOGIDO["fotogramas"] = valor
+        return {}
+
+
+M["Doble_Numero"] = Doble_Numero
+
+
+def prompt_fotos(solo):
+    p = prompt_raiz()
+    del p["2"]
+    p["1"] = {"class_type": "CP_PosesDesdeFotos", "inputs": dict(CASILLAS_FOTOS, fotogramas_por_pose=D_FOTOS,
+                                                                  espera_final=ESPERA_FOTOS, orden="casilla")}
+    p["3"]["inputs"].update(mapa=["1", 1], transicion_max=["1", 3], mas_lentos=True)  # como la tarjeta de fotos
+    if solo is not None:
+        p["20"]["inputs"]["solo_animacion"] = solo
+    p["31"] = {"class_type": "Doble_Numero", "inputs": {"valor": ["1", 4]}}
+    return p
+
+
+esperados = (N_FOTOS - 1) * D_FOTOS + 1 + ESPERA_FOTOS
+secuencias = {}
+for solo in (False, True):
+    nuevo_ejecutor()
+    reg8, mens8, _ = ejecutar(prompt_fotos(solo), f"p9_{solo}")
+    nombre = f"solo_animacion={solo}"
+    comprobar(EJECUTOR.success, f"{nombre}: execution_success " + str([(e, d.get('exception_message', '')[:200]) for e, d in mens8 if e.startswith('execution_e')]))
+    if not EJECUTOR.success:
+        continue
+    dyn8 = DINAMICOS[-1]
+    plan8 = json.loads(next(d["inputs"]["plan"] for d in dyn8.ephemeral_prompt.values() if d["class_type"] == "CP_LentaElegir"))
+    V8 = plan8["ventanas"]
+    print(f"{nombre}: plan inicios={plan8['inicios']} total={plan8['total']} transicion_max={plan8['transicion_max']} "
+          f"lentos={plan8['lentos']} ventanas={[(v['p0'], v['p1'], v['n']) for v in V8]}")
+    comprobar(RECOGIDO.get("fotogramas") == esperados, f"{nombre}: el nodo de fotos anuncia {RECOGIDO.get('fotogramas')} fotogramas ({esperados})")
+    comprobar(plan8["inicios"] == [k * D_FOTOS for k in range(N_FOTOS)] and plan8["total"] == esperados
+              and plan8["transicion_max"] == D_FOTOS, f"{nombre}: el plan sale del mapa de las fotos con transicion_max = {D_FOTOS}")
+    comprobar(plan8.get("mas_lentos") is True and "ritmo" not in plan8 and all(x == 32 for x in plan8["lentos"]),
+              f"{nombre}: con mas_lentos cada salto de {D_FOTOS} fotogramas lleva 32 lentos")
+    an8, pl8 = RECOGIDO.get("animacion"), RECOGIDO.get("playblast")
+    comprobar(an8 is not None and an8.shape[0] == esperados and tuple(pl8.shape) == tuple(an8.shape),
+              f"{nombre}: animacion y playblast con {esperados} fotogramas: {None if an8 is None else tuple(an8.shape)}")
+    if an8 is None:
+        continue
+    dec8 = {n: d for c, n, d in reg8 if c == "LTXVTiledVAEDecode"}
+    cod8 = {d["codigo"]: (ventana_de(n), d["familia"]) for n, d in dec8.items()}
+    origen = [cod8[_marca(an8, f)[0]] + (_marca(an8, f)[1],) for f in range(an8.shape[0])]
+    familia = "suave" if solo else "render"
+    comprobar(all(o[1] == familia for o in origen), f"{nombre}: la animacion sale {'del playblast' if solo else 'de los render'}")
+    if solo:
+        comprobar(torch.equal(an8, pl8) and "LTXAddVideoICLoRAGuide" not in por_clase(reg8),
+                  f"{nombre}: animacion = playblast y nada de la etapa 2")
+    seq8 = [(o[0], o[2]) for o in origen]
+    secuencias[solo] = seq8
+    # cada pose en su fotograma: el lento del plan, y la guia de ese lento es la foto de esa pose
+    guias8 = [(n, d) for c, n, d in reg8 if c == "LTXVAddGuide" and not d["subido"]]
+    en_su_sitio = True
+    for k in range(N_FOTOS):
+        w = max(i for i, v in enumerate(V8) if v["p0"] <= k)
+        lento = V8[w]["pos"][k - V8[w]["p0"]]
+        guia = {d["pose"] for n, d in guias8 if ventana_de(n) == w and d["frame_idx"] == lento}
+        en_su_sitio &= seq8[k * D_FOTOS] == (w, lento) and guia == {k}
+    comprobar(en_su_sitio, f"{nombre}: cada pose k cae en el fotograma k x {D_FOTOS} y su guia es la foto k")
+    hasta = (N_FOTOS - 1) * D_FOTOS
+    comprobar(all(b > a for a, b in zip(seq8[:hasta], seq8[1:hasta + 1])),
+              f"{nombre}: de la primera pose a la ultima se mueve en todos los fotogramas")
+    comprobar(seq8[hasta:] == [(len(V8) - 1, V8[-1]["n"] - 1)] * (1 + ESPERA_FOTOS),
+              f"{nombre}: la ultima pose se queda {1 + ESPERA_FOTOS} fotogramas")
+    comprobar(ejecutados(mens8).count("1") == 1, f"{nombre}: CP_PosesDesdeFotos (el de verdad) se ejecuta una vez")
+comprobar(secuencias.get(True) == secuencias.get(False), "con y sin render se eligen los mismos (ventana, indice lento)")
+
+# ================================================================================================ 9: ritmo 2
+print("\n== 9. ritmo 2 con el mapa de video ==")
+nuevo_ejecutor()
+p_ritmo = prompt_raiz()
+p_ritmo["3"]["inputs"]["ritmo"] = 2
+p_ritmo["20"]["inputs"]["solo_animacion"] = True
+reg9, mens9, _ = ejecutar(p_ritmo, "p10")
+comprobar(EJECUTOR.success, "ritmo 2: execution_success")
+plan9 = json.loads(next(d["inputs"]["plan"] for d in DINAMICOS[-1].ephemeral_prompt.values() if d["class_type"] == "CP_LentaElegir"))
+V9 = plan9["ventanas"]
+print(f"plan: inicios={plan9['inicios']} total={plan9['total']} transicion_max={plan9['transicion_max']} lentos={plan9['lentos']} "
+      f"ventanas={[(v['p0'], v['p1'], v['n']) for v in V9]}")
+comprobar(plan9.get("ritmo") == 2 and plan9["inicios"] == [2 * x for x in plan["inicios"]] and plan9["total"] == 2 * plan["total"]
+          and plan9["transicion_max"] == 2 * plan["transicion_max"], "el plan lleva inicios, total y transicion_max al doble")
+an9 = RECOGIDO.get("animacion")
+comprobar(an9 is not None and an9.shape[0] == 2 * plan["total"], f"la animacion tiene {2 * plan['total']} fotogramas: "
+          f"{None if an9 is None else tuple(an9.shape)}")
+if an9 is not None:
+    dec9 = {n: d for c, n, d in reg9 if c == "LTXVTiledVAEDecode"}
+    cod9 = {d["codigo"]: ventana_de(n) for n, d in dec9.items()}
+    seq9 = [(cod9[_marca(an9, f)[0]], _marca(an9, f)[1]) for f in range(an9.shape[0])]
+    ini9 = plan9["inicios"]
+    comprobar(all(seq9[ini9[k]] == (max(i for i, v in enumerate(V9) if v["p0"] <= k),
+                                    V9[max(i for i, v in enumerate(V9) if v["p0"] <= k)]["pos"][k - V9[max(i for i, v in enumerate(V9) if v["p0"] <= k)]["p0"]])
+                  for k in range(len(ini9))), "cada pose cae en el doble de su inicio")
+    comprobar(all(b >= a for a, b in zip(seq9, seq9[1:])), "los fotogramas elegidos avanzan siempre")
+    quieto9 = ini9[3] - ini9[2] - plan9["transicion_max"]
+    tramo9 = seq9[ini9[2] + quieto9:ini9[3] + 1]
+    comprobar(quieto9 > 0 and len(set(seq9[ini9[2]:ini9[2] + quieto9 + 1])) == 1 and all(b > a for a, b in zip(tramo9, tramo9[1:])),
+              f"la espera larga sigue quieta {quieto9} fotogramas y el salto ocupa los {plan9['transicion_max']} ultimos")
+
+# ================================================================================================ 10: tarjeta publicada
+print("\n== 10. la tarjeta publicada (sin ritmo, mas_lentos ni solo_animacion) da el plan y el subgrafo de la v0.14 ==")
+import hashlib  # noqa: E402
+
+with open(os.path.join(PACK, "tests", "datos", "compat_v014.json"), encoding="utf-8") as _f:
+    V014 = json.load(_f)["tarjeta_publicada"]
+with open(os.path.join(PACK, "tests", "datos", "lenta_0003.json"), encoding="utf-8") as _f:
+    CONTROL = json.load(_f)
+N_CONTROL = len(CONTROL["inicios"])
+
+
+def _poses_control():
+    im = torch.full((N_CONTROL, 54, 96, 3), 0.25)
+    for k in range(N_CONTROL):
+        im[k, :6, :, :] = (k + 1) / 40
+    return im
+
+
+class Doble_Texto:
+    """Nodo de salida: guarda el texto del plan tal cual sale de CP_LentaPlan."""
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    FUNCTION = "f"
+    CATEGORY = "pruebas"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"texto": ("STRING", {"forceInput": True})}}
+
+    def f(self, texto):
+        RECOGIDO["plan"] = texto
+        return {}
+
+
+M["Doble_Poses_Control"] = _fuente("Doble_Poses_Control", "IMAGE", lambda: _poses_control())
+M["Doble_Texto"] = Doble_Texto
+p10 = prompt_raiz(mapa={"bloques": CONTROL["bloques"]})
+p10["1"] = {"class_type": "Doble_Poses_Control", "inputs": {}}
+p10["3"]["inputs"].update(V014["plan_entradas"])  # umbral, max_ventana, transicion_max y max_total de la tarjeta
+p10["32"] = {"class_type": "Doble_Texto", "inputs": {"texto": ["3", 0]}}
+g10 = V014["grafos"]["prueba"]
+p10["20"]["inputs"].update(ancho=g10["ancho"], alto=g10["alto"])
+enlaces10 = {k: p10["20"]["inputs"][k] for k in g10["enlaces"]}
+comprobar(enlaces10 == g10["enlaces"], "el prompt lleva los enlaces con los que se genero la huella del subgrafo")
+comprobar(sorted(p10["3"]["inputs"]) == ["mapa", "max_total", "max_ventana", "poses", "transicion_max", "umbral"]
+          and "solo_animacion" not in p10["20"]["inputs"], "CP_LentaPlan sin ritmo ni mas_lentos y CP_BlockingLento sin solo_animacion")
+# la medida de los saltos es la del plano de control (las poses de la prueba son sinteticas)
+_mod_plan = sys.modules[M["CP_LentaPlan"].__module__]
+_medir = _mod_plan.medir_saltos
+_mod_plan.medir_saltos = lambda poses, nodo="": list(CONTROL["saltos_dis_480"])
+try:
+    nuevo_ejecutor()
+    reg10, mens10, _ = ejecutar(p10, "p11")
+finally:
+    _mod_plan.medir_saltos = _medir
+comprobar(EJECUTOR.success, "tarjeta publicada: execution_success " + str([(e, d.get('exception_message', '')[:200]) for e, d in mens10 if e.startswith('execution_e')]))
+texto10 = RECOGIDO.get("plan") or "{}"
+plan10 = json.loads(texto10)
+print(f"plan: lentos={plan10.get('lentos')} ventanas={[(v['p0'], v['p1'], v['n']) for v in plan10.get('ventanas', [])]} "
+      f"generados={sum(v['n'] for v in plan10.get('ventanas', []))}")
+comprobar(hashlib.sha256(texto10.encode("utf-8")).hexdigest() == V014["plan"]["sha256"] and "ritmo" not in plan10 and "mas_lentos" not in plan10,
+          "el plan es el de la v0.14 byte a byte (huella del JSON)")
+ef10 = DINAMICOS[-1].ephemeral_prompt
+_final = [i for i in ef10 if i.endswith("w0.elegir")]
+prefijo10 = _final[0][:-len("w0.elegir")] if len(_final) == 1 else None
+
+
+def _sin_prefijo(v):
+    if isinstance(v, str) and prefijo10 and v.startswith(prefijo10):
+        return "@" + v[len(prefijo10):]
+    if isinstance(v, list) and len(v) == 2 and isinstance(v[1], int):
+        return [_sin_prefijo(v[0]), v[1]]
+    return v
+
+
+limpio10 = {_sin_prefijo(i): {"class_type": d["class_type"], "inputs": {k: _sin_prefijo(x) for k, x in d["inputs"].items()}}
+            for i, d in ef10.items()}
+huella10 = hashlib.sha256(json.dumps(limpio10, sort_keys=True).encode("utf-8")).hexdigest()
+print(f"subgrafo: {len(ef10)} nodos (v0.14: {g10['nodos']}), prefijo {prefijo10!r}")
+comprobar(prefijo10 is not None and len(ef10) == g10["nodos"] and huella10 == g10["sha256"],
+          "el subgrafo que expande el motor es el de la v0.14, nodo a nodo (huella)")
+an10 = RECOGIDO.get("animacion")
+comprobar(an10 is not None and an10.shape[0] == CONTROL["bloques"][-1][1] + 1 and len([1 for c, _, _ in reg10 if c == "LTXAddVideoICLoRAGuide"]) > 0,
+          f"la animacion tiene los {CONTROL['bloques'][-1][1] + 1} fotogramas del blocking y pasa por el render")
 
 # ------------------------------------------------------------------------------------------------ cierre
 fuera = [os.path.join(r, f) for r, _, fs in os.walk(folder_paths.get_output_directory()) for f in fs]

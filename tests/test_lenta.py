@@ -21,7 +21,8 @@ class _Port:
 
 
 def _mk(name):
-    return type(name, (), {"Input": staticmethod(_Port), "Output": staticmethod(_Port)})
+    # el puerto lleva el tipo en el nombre de su clase (BooleanInput...): asi el esquema se puede comprobar por tipo
+    return type(name, (), {"Input": type(name + "Input", (_Port,), {}), "Output": type(name + "Output", (_Port,), {})})
 
 
 class _Salida:
@@ -617,7 +618,9 @@ def test_esquemas_con_las_entradas_y_salidas_del_contrato():
     plan = L.LentaPlan.define_schema()
     assert plan["node_id"] == "CP_LentaPlan" and plan["category"] == "character-pipeline/poses"
     assert plan["display_name"] == "C\u00e1mara lenta \u00b7 Plan"
-    assert [p.a[0] for p in plan["inputs"]] == ["poses", "mapa", "umbral", "max_ventana", "transicion_max", "max_total"]
+    # v0.15: "ritmo" y "mas_lentos" opcionales al final (su contrato lo prueba test_esquema_plan_con_ritmo_y_mas_lentos...)
+    assert [p.a[0] for p in plan["inputs"]] == ["poses", "mapa", "umbral", "max_ventana", "transicion_max", "max_total",
+                                               "ritmo", "mas_lentos"]
     assert [p.k["display_name"] for p in plan["outputs"]] == ["plan", "n_ventanas", "fotogramas_lentos", "info"]
     por_nombre = {p.a[0]: p.k for p in plan["inputs"]}
     assert por_nombre["mapa"]["force_input"] is True
@@ -635,9 +638,298 @@ def test_esquemas_con_las_entradas_y_salidas_del_contrato():
     assert not any(por_nombre[n].get("optional") for n in ("guia", "render", "plan", "ventana"))
 
 
+# ---------------------------------------------------------------- ritmo y lentos de los saltos largos
+
+def _lentos_de_antes(saltos_px, duraciones, umbral, transicion_max):
+    """La regla de la v0.14, copiada: 32 si el salto es grande, 16 si no, y al menos el multiplo de 8 de m."""
+    return [max(32 if px >= umbral else 16, 8 * -(-min(d, transicion_max) // 8)) for px, d in zip(saltos_px, duraciones)]
+
+
+def _mapa_al_azar(rng, d_max=8):
+    n = int(rng.integers(2, 26))
+    dur = [int(rng.integers(1, d_max + 1)) for _ in range(n - 1)]
+    inicios = [0]
+    for x in dur:
+        inicios.append(inicios[-1] + x)
+    return inicios, inicios[-1] + int(rng.integers(1, 9)), [float(x) for x in rng.random(n - 1) * 25.0]
+
+
+def _salida(plan, medidos):
+    """Todo el video: por cada fotograma de salida, (ventana, lento elegido)."""
+    salida = []
+    for w in range(len(plan["ventanas"])):
+        salida += [(w, i) for i in L.indices_ventana(plan, w, medidos[w])]
+    return salida
+
+
+def _donde_cae_la_pose(plan, k):
+    """(ventana, lento) de la pose k: la frontera es el lento 0 de la ventana siguiente; la ultima, el final."""
+    ventanas = plan["ventanas"]
+    for w, v in enumerate(ventanas):
+        if v["p0"] <= k < v["p1"]:
+            return w, v["pos"][k - v["p0"]]
+    return len(ventanas) - 1, ventanas[-1]["n"] - 1
+
+
+def _medidos_al_azar(rng, plan, forma=0):
+    medidos = []
+    for v in plan["ventanas"]:
+        if forma == 0:
+            medidos.append(rng.random(v["n"] - 1) * 5.0)
+        elif forma == 1:
+            medidos.append(np.zeros(v["n"] - 1))
+        else:
+            m = np.zeros(v["n"] - 1)
+            m[rng.integers(0, len(m))] = 30.0
+            medidos.append(m)
+    return medidos
+
+
+def test_ritmo_1_es_el_plan_de_hoy():
+    # Sin ritmo ni mas_lentos (o ritmo 1 y mas_lentos False) el plan es el de la v0.14 para cualquier duracion de
+    # salto, tambien las de mas de 8 fotogramas (la regla de mas lentos es opt-in). La comparacion contra planes
+    # generados con la v0.14 de verdad esta en test_lenta_compat_v014.py.
+    rng = np.random.default_rng(31)
+    for _ in range(300):
+        inicios, total, saltos = _mapa_al_azar(rng, d_max=int(rng.choice([8, 20, 40])))
+        umbral, tope, transicion = float(rng.choice([0.0, 9.0, 20.0])), int(rng.choice([33, 177])), int(rng.choice([2, 5, 8, 12, 24]))
+        plan = L.planificar(inicios, total, saltos, umbral, tope, transicion, 8001)
+        redondos = [round(x, 3) for x in saltos]
+        lentos = _lentos_de_antes(redondos, [b - a for a, b in zip(inicios, inicios[1:])], umbral, transicion)
+        assert plan == L.armar_plan(inicios, total, redondos, lentos, L.repartir_ventanas(lentos, tope), transicion)
+        assert "ritmo" not in plan and "mas_lentos" not in plan
+        assert plan == L.planificar(inicios, total, saltos, umbral, tope, transicion, 8001, ritmo=1, mas_lentos=False)
+    control = L.planificar(INICIOS, 77, DATOS["saltos_dis_480"])
+    assert control["lentos"] == _lentos_de_antes(control["saltos_px"], [b - a for a, b in zip(INICIOS, INICIOS[1:])], 9.0, 12)
+    assert "ritmo" not in control and "ritmo" not in json.loads(json.dumps(control))
+
+
+def test_ritmo_escala_inicios_total_y_transicion_y_la_pose_cae_en_su_sitio():
+    rng = np.random.default_rng(5)
+    base = L.planificar(INICIOS, 77, DATOS["saltos_dis_480"])
+    for r in (2, 3, 4):
+        plan = L.planificar(INICIOS, 77, DATOS["saltos_dis_480"], ritmo=r)
+        assert plan["inicios"] == [x * r for x in INICIOS] and plan["total"] == 77 * r
+        assert plan["transicion_max"] == 12 * r and plan["ritmo"] == r and plan["saltos_px"] == base["saltos_px"]
+        assert L.leer_plan(json.dumps(plan)) == plan  # el ritmo viaja en el JSON
+        for forma in (0, 1, 2):
+            salida = _salida(plan, _medidos_al_azar(rng, plan, forma))
+            assert len(salida) == 77 * r, (r, len(salida))
+            for k in range(len(INICIOS)):
+                assert salida[INICIOS[k] * r] == _donde_cae_la_pose(plan, k), (r, k, forma)
+            assert salida == sorted(salida)  # siempre hacia delante
+    # y con lotes de verdad: dos ventanas encadenadas con ritmo 2 dan el doble de fotogramas
+    plan = L.planificar([0, 3, 5, 9], 12, [1.0, 2.0, 3.0], max_ventana=33, ritmo=2)
+    assert plan["inicios"] == [0, 6, 10, 18] and plan["total"] == 24 and plan["transicion_max"] == 24
+    r_ant = g_ant = None
+    for w, v in enumerate(plan["ventanas"]):
+        r_ant, g_ant = L.montar_ventana(_lote(v["n"], 4, 6), _lote(v["n"], 4, 6), plan, w, r_ant, g_ant, medido=np.ones(v["n"] - 1))
+    assert len(r_ant) == 24 and len(g_ant) == 24
+
+
+def test_regla_de_mas_lentos_con_mas_lentos_true():
+    # Con mas_lentos: m = 8 como siempre; m = 9 a 16: 32 aunque el salto sea pequeno; m = 24: 32; m = 40: 40.
+    for m, esperado in ((1, 16), (4, 16), (8, 16), (9, 32), (12, 32), (16, 32), (17, 32), (24, 32), (32, 32), (33, 40), (40, 40)):
+        assert L.lentos_por_salto([1.0], [m], 9.0, 64, mas_margen=True) == [esperado], (m, esperado)
+        assert L.lentos_por_salto([30.0], [m], 9.0, 64, mas_margen=True) == [max(32, 8 * -(-m // 8))], m  # el grande no cambia
+        # sin mas_margen, la regla de la v0.14
+        assert L.lentos_por_salto([1.0], [m], 9.0, 64) == [max(16, 8 * -(-m // 8))], m
+        plan = L.planificar([0, m], m + 1, [1.0], transicion_max=m, mas_lentos=True)
+        assert plan["lentos"] == [esperado] and plan["mas_lentos"] is True and "ritmo" not in plan
+        assert L.leer_plan(json.dumps(plan)) == plan  # mas_lentos viaja en el JSON
+        assert "Regla de mas lentos activa (mas_lentos)" in L.resumir_salida(plan)
+        aviso = "AVISO" in L.resumir_salida(plan)
+        assert aviso == (esperado > 32), (m, L.resumir_salida(plan))
+        assert L.planificar([0, m], m + 1, [1.0], transicion_max=m)["lentos"] == [max(16, 8 * -(-m // 8))]
+    assert L.TRAMO_CORTO == 8
+    # con m de 9 a 16 siempre hay al menos el doble de lentos que de fotogramas
+    for m in range(1, 17):
+        assert L.lentos_por_salto([0.0], [m], 9.0, 64, mas_margen=True)[0] >= 2 * m, m
+    # la espera larga del blocking: m = transicion_max = 12 -> 32 lentos con mas_lentos; sin el, 16 como en la v0.14
+    assert L.planificar([0, 40], 41, [2.0], mas_lentos=True)["lentos"] == [32]
+    assert L.planificar([0, 40], 41, [2.0])["lentos"] == [16]
+    assert "Regla de lentos de siempre" in L.resumir_salida(L.planificar([0, 40], 41, [2.0]))
+    # el caso de los revisores: 12 poses cada 10 fotogramas, saltos de 5 px
+    ini = [i * 10 for i in range(12)]
+    viejo = L.planificar(ini, 120, [5.0] * 11)
+    assert set(viejo["lentos"]) == {16} and sum(v["n"] for v in viejo["ventanas"]) == 177
+    nuevo = L.planificar(ini, 120, [5.0] * 11, mas_lentos=True)
+    assert set(nuevo["lentos"]) == {32} and sum(v["n"] for v in nuevo["ventanas"]) == 355
+    info = L.resumir_salida(L.planificar([0, 40], 41, [2.0], transicion_max=40))
+    assert "AVISO: 1 salto con mas de 32 lentos (hasta 40)" in info and "validados 16 y 32" in info, info
+
+
+def test_regla_de_mas_lentos_se_activa_sola_con_ritmo():
+    # con ritmo > 1 la regla va siempre, con o sin mas_lentos; el plan apunta el ritmo y no mas_lentos si no se pidio
+    ini = [i * 10 for i in range(12)]
+    for r in (2, 3, 4):
+        plan = L.planificar(ini, 120, [5.0] * 11, ritmo=r)
+        m = min(10 * r, 12 * r)
+        assert plan["lentos"] == [max(32, 8 * -(-m // 8))] * 11, (r, plan["lentos"])
+        assert plan["ritmo"] == r and "mas_lentos" not in plan
+        assert L.planificar(ini, 120, [5.0] * 11, ritmo=r, mas_lentos=True)["lentos"] == plan["lentos"]
+        assert "Regla de mas lentos activa (ritmo " in L.resumir_salida(plan)
+    # saltos de 4 fotogramas con ritmo 2: m = 8, la regla no cambia nada
+    assert L.planificar([0, 4, 8], 9, [1.0, 1.0], ritmo=2)["lentos"] == [16, 16]
+    # y con ritmo 2 un salto de 5 fotogramas (m = 10) ya lleva 32
+    assert L.planificar([0, 5, 8], 9, [1.0, 1.0], ritmo=2)["lentos"] == [32, 16]
+
+
+def test_planes_viejos_sin_ritmo_se_leen():
+    viejo = _plan_v8()
+    assert "ritmo" not in viejo and L.resumir_salida(viejo).startswith("Salida: 77 fotogramas a partir de 548")
+    # el plan de la v0.14 lleva 16 lentos en saltos de 9 a 12 fotogramas: sigue valiendo (la regla nueva solo decide)
+    antiguo = L.armar_plan([0, 12, 22], 23, [1.0, 1.0], [16, 16], [(0, 2)], 12)
+    assert "ritmo" not in antiguo and L.leer_plan(json.dumps(antiguo)) == antiguo
+    con_ritmo = dict(antiguo, ritmo=3)
+    assert L.leer_plan(json.dumps(con_ritmo))["ritmo"] == 3
+    _falla(lambda: L.leer_plan(json.dumps(dict(antiguo, ritmo="tres"))), "[CP_LentaElegir]", "le falta un dato o lo trae mal")
+    _falla(lambda: L.leer_plan(json.dumps(dict(antiguo, ritmo=1.5))), "no es un entero")
+    _falla(lambda: L.leer_plan(json.dumps(dict(antiguo, ritmo=0))), "El ritmo tiene que ser 1 o mas")
+    assert L.leer_plan(json.dumps(dict(antiguo, mas_lentos=True)))["mas_lentos"] is True
+    assert "mas_lentos" not in L.leer_plan(json.dumps(dict(antiguo, mas_lentos=False)))
+    _falla(lambda: L.leer_plan(json.dumps(dict(antiguo, mas_lentos="si"))), "le falta un dato o lo trae mal", "mas_lentos")
+
+
+def test_ritmo_fuera_de_rango_y_topes():
+    for malo in (0, 9, -1, 1.5, "2", None, True):
+        _falla(lambda: L.planificar([0, 4], 5, [1.0], ritmo=malo), "[CP_LentaPlan]", "ritmo", "de 1 a 8")
+    assert L.planificar([0, 4], 5, [1.0], ritmo=8)["total"] == 40
+    # tope de fotogramas de SALIDA: el blocking por el ritmo
+    assert L.MAX_SALIDA == 1000
+    assert L.planificar([0, 400], 500, [1.0], ritmo=2)["total"] == 1000  # justo en el tope
+    _falla(lambda: L.planificar([0, 300], 334, [1.0], ritmo=3), "[CP_LentaPlan]", "1002 fotogramas de salida", "334", "ritmo 3",
+           "tope es 1000", "baja el ritmo (con 1 no hay este tope)", "25 MB")
+    assert L.planificar([0, 300], 501, [1.0], ritmo=2, max_salida=1002)["total"] == 1002
+
+
+def test_tope_de_salida_solo_con_ritmo():
+    # 1200 fotogramas (30 poses cada 40): con ritmo 1 es el plan de la v0.14 (que no tenia tope de salida)...
+    ini = [i * 40 for i in range(30)]
+    uno = L.planificar(ini, 1200, [5.0] * 29)
+    assert uno == L.planificar(ini, 1200, [5.0] * 29, ritmo=1, mas_lentos=False) and "ritmo" not in uno
+    lentos = _lentos_de_antes([5.0] * 29, [40] * 29, 9.0, 12)
+    assert uno == L.armar_plan(ini, 1200, [5.0] * 29, lentos, L.repartir_ventanas(lentos), 12)
+    assert uno["total"] == 1200 and set(uno["lentos"]) == {16}
+    # ...con mas_lentos tampoco hay tope (sin ritmo)...
+    assert L.planificar(ini, 1200, [5.0] * 29, mas_lentos=True)["total"] == 1200
+    assert L.planificar([0, 300], 1001, [1.0], max_salida=1000, mas_lentos=True)["total"] == 1001
+    # ...y con ritmo 2, error claro
+    _falla(lambda: L.planificar(ini, 1200, [5.0] * 29, ritmo=2), "[CP_LentaPlan]", "Con ritmo 2 salen 2400 fotogramas de salida",
+           "1200 del blocking", "tope es 1000", "baja el ritmo (con 1 no hay este tope)", "parte el plano")
+    _falla(lambda: L.planificar([0, 300], 501, [1.0], ritmo=2), "1002 fotogramas de salida")
+    # max_total sigue contando los lentos generados, que con ritmo crecen
+    plan = L.planificar(INICIOS, 77, DATOS["saltos_dis_480"], ritmo=4)
+    generados = sum(v["n"] for v in plan["ventanas"])
+    assert generados > sum(v["n"] for v in L.planificar(INICIOS, 77, DATOS["saltos_dis_480"])["ventanas"])
+    assert L.planificar(INICIOS, 77, DATOS["saltos_dis_480"], max_total=generados, ritmo=4) == plan
+    _falla(lambda: L.planificar(INICIOS, 77, DATOS["saltos_dis_480"], max_total=generados - 1, ritmo=4),
+           f"{generados} fotogramas lentos", "demasiado largo", "Con ritmo 4", "bajar el ritmo")
+
+
+def _mapa_de_fotos(n, d):
+    """El mapa sintetico de un blocking de fotos: n poses de d fotogramas cada una, seguidas desde el 0."""
+    return json.dumps({"bloques": [[k * d, k * d + d - 1] for k in range(n)]})
+
+
+def test_mapa_de_fotos_sale_n_por_d_y_se_mueve_en_cada_fotograma_del_salto():
+    rng = np.random.default_rng(17)
+    for n in (2, 5, 13, 25):
+        for d in (8, 12, 16):
+            inicios, total = L.leer_mapa(_mapa_de_fotos(n, d), n)
+            assert total == n * d
+            # como la tarjeta de fotos: mas_lentos encendido
+            plan = L.planificar(inicios, total, [float(x) for x in rng.random(n - 1) * 20.0], transicion_max=d, mas_lentos=True)
+            assert all(x >= 2 * d for x in plan["lentos"]), (n, d, plan["lentos"])
+            for forma in (0, 1, 2):
+                salida = _salida(plan, _medidos_al_azar(rng, plan, forma))
+                assert len(salida) == n * d  # la ultima pose se queda quieta sus d fotogramas: la espera final
+                for k in range(n - 1):
+                    tramo = salida[k * d:(k + 1) * d]
+                    assert tramo[0] == _donde_cae_la_pose(plan, k)
+                    assert all(b > a for a, b in zip(tramo, tramo[1:])), (n, d, k, forma, tramo)  # ningun tramo quieto
+                assert salida[(n - 1) * d:] == [_donde_cae_la_pose(plan, n - 1)] * d
+
+
+def test_propiedades_al_azar_con_ritmo():
+    rng = np.random.default_rng(23)
+    for caso in range(300):
+        inicios, total, saltos = _mapa_al_azar(rng, d_max=int(rng.choice([5, 12, 20])))
+        r = int(rng.integers(1, 5))
+        transicion = int(rng.choice([2, 5, 8, 12, 16, 40]))
+        tope = int(rng.choice([33, 65, 177]))
+        if r > 1 and total * r > L.MAX_SALIDA:
+            _falla(lambda: L.planificar(inicios, total, saltos, ritmo=r), "tope es 1000")
+            continue
+        plan = L.planificar(inicios, total, saltos, float(rng.choice([0.0, 9.0, 30.0])), tope, transicion, 8001, ritmo=r)
+        assert L.leer_plan(json.dumps(plan)) == plan and plan.get("ritmo", 1) == r
+        assert plan["inicios"] == [x * r for x in inicios] and plan["total"] == total * r and plan["transicion_max"] == transicion * r
+        for k, x in enumerate(plan["lentos"]):
+            m = min(plan["inicios"][k + 1] - plan["inicios"][k], plan["transicion_max"])
+            assert x % 8 == 0 and x >= m and x in (16, 32, 8 * -(-m // 8)), (caso, k, x, m)
+        for v in plan["ventanas"]:
+            assert v["n"] % 8 == 1 and all(p % 8 == 0 for p in v["pos"]) and v["n"] == v["pos"][-1] + 1
+            assert v["n"] <= tope or v["p1"] - v["p0"] == 1
+        salida = _salida(plan, _medidos_al_azar(rng, plan, caso % 3))
+        assert len(salida) == total * r, caso
+        assert salida == sorted(salida), caso  # no decrecientes
+        assert all(0 <= i < plan["ventanas"][w]["n"] for w, i in salida), caso
+        for k in range(len(inicios)):
+            assert salida[plan["inicios"][k]] == _donde_cae_la_pose(plan, k), (caso, k)
+
+
+def test_esquema_plan_con_ritmo_y_mas_lentos_opcionales_al_final_y_nodo_sin_ellos_igual():
+    esquema = L.LentaPlan.define_schema()
+    entradas = esquema["inputs"]
+    assert [p.a[0] for p in entradas][:6] == ["poses", "mapa", "umbral", "max_ventana", "transicion_max", "max_total"]
+    assert [p.a[0] for p in entradas][6:] == ["ritmo", "mas_lentos"] and len(entradas) == 8
+    ritmo, mas = entradas[6].k, entradas[7].k
+    assert (ritmo["default"], ritmo["min"], ritmo["max"], ritmo["optional"]) == (1, 1, 8, True)
+    assert type(entradas[6]).__name__ == "IntInput" and type(entradas[7]).__name__ == "BooleanInput"
+    assert (mas["default"], mas["optional"]) == (False, True)
+    assert not any(p.k.get("optional") for p in entradas[:6])
+    assert [p.k["display_name"] for p in esquema["outputs"]] == ["plan", "n_ventanas", "fotogramas_lentos", "info"]
+
+    poses = torch.rand(4, 8, 12, 3)
+    mapa = json.dumps({"bloques": [[0, 3], [4, 7], [8, 11], [12, 12]]})
+    medir = L.medir_saltos
+    L.medir_saltos = lambda p, nodo="": [2.0, 30.0, 2.0][:len(p) - 1]
+    try:
+        sin = L.LentaPlan.execute(poses, mapa).args
+        uno = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 1).args
+        vacio = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, None).args
+        falso = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 1, False).args
+        nada = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, None, None).args
+        assert sin == uno == vacio == falso == nada and "ritmo" not in json.loads(sin[0]) and "mas_lentos" not in json.loads(sin[0])
+        mas = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 1, True).args
+        assert json.loads(mas[0])["lentos"] == [16, 32, 16] and json.loads(mas[0])["mas_lentos"] is True  # m = 4: no cambia
+        assert "Regla de mas lentos activa (mas_lentos)" in mas[3]
+        assert (sin[1], sin[2]) == (1, 65)
+        assert sin[3].startswith("4 poses en 13 fotogramas: 1 ventana de 65") and "Salida: 13 fotogramas a partir de 65 fotogramas lentos generados." in sin[3]
+        dos = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 2).args
+        plan = json.loads(dos[0])
+        assert plan["ritmo"] == 2 and plan["total"] == 26 and plan["inicios"] == [0, 8, 16, 24] and plan["lentos"] == [16, 32, 16]
+        assert "Salida: 26 fotogramas (ritmo 2" in dos[3] and "AVISO" not in dos[3], dos[3]
+        tres = L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 3).args
+        assert json.loads(tres[0])["lentos"] == [32, 32, 32] and (tres[1], tres[2]) == (1, 97)  # m = 12: ya 32
+        # un salto de 40 fotogramas sacados enteros: 40 lentos, sin validar en GPU, avisa sin fallar
+        largo = L.LentaPlan.execute(poses[:2], json.dumps({"bloques": [[0, 39], [40, 40]]}), 9.0, 177, 40, 1601).args
+        assert json.loads(largo[0])["lentos"] == [40] and "AVISO: 1 salto con mas de 32 lentos" in largo[3], largo[3]
+        _falla(lambda: L.LentaPlan.execute(poses, mapa, 9.0, 177, 12, 1601, 9), "[CP_LentaPlan]", "ritmo")
+    finally:
+        L.medir_saltos = medir
+
+
 if __name__ == "__main__":
     pruebas = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    fallos = []
     for t in pruebas:
-        t()
+        try:
+            t()
+        except Exception as e:  # se siguen las demas: asi se ve de una vez todo lo que falla
+            fallos.append(t.__name__)
+            print("FALLA", t.__name__, repr(e)[:300])
+            continue
         print("ok", t.__name__)
-    print(len(pruebas), "pruebas")
+    print(len(pruebas), "pruebas", f"y {len(fallos)} fallan: {fallos}" if fallos else "")
+    sys.exit(1 if fallos else 0)

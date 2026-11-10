@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import types
 from collections import Counter
@@ -40,7 +41,7 @@ class _IO:
     ComfyNode = type("ComfyNode", (), {})
 
 
-for _n in ("Image", "Int", "String", "Float", "Noise", "Model", "Vae", "LatentUpscaleModel", "Conditioning"):
+for _n in ("Image", "Int", "String", "Float", "Boolean", "Noise", "Model", "Vae", "LatentUpscaleModel", "Conditioning"):
     setattr(_IO, _n, _mk(_n))
 
 latest.io = _IO
@@ -750,12 +751,14 @@ def test_nodo_se_declara_expandible_y_con_enlaces_crudos():
     assert esquema["node_id"] == "CP_BlockingLento" and esquema["enable_expand"] is True
     assert esquema["category"] == "character-pipeline/poses"
     entradas = {p.id: p for p in esquema["inputs"]}
-    assert list(entradas) == ["plan", "ancho", "alto", *L.ENLACES] and set(L.ENLACES) == set(ENLACES)
+    # v0.15: "solo_animacion" opcional al final (no es un enlace crudo)
+    assert list(entradas) == ["plan", "ancho", "alto", *L.ENLACES, "solo_animacion"] and set(L.ENLACES) == set(ENLACES)
+    assert entradas["solo_animacion"].k.get("optional") is True and entradas["solo_animacion"].k.get("default") is False
     assert {k: p.tipo for k, p in entradas.items()} == {
         "plan": "String", "ancho": "Int", "alto": "Int", "ruido": "Noise", "poses": "Image", "arte": "Image",
         "modelo_suave": "Model", "modelo_render": "Model", "factor_guia": "Float", "vae": "Vae",
         "escalador": "LatentUpscaleModel", "positivo_suave": "Conditioning", "negativo_suave": "Conditioning",
-        "positivo_render": "Conditioning", "negativo_render": "Conditioning"}
+        "positivo_render": "Conditioning", "negativo_render": "Conditioning", "solo_animacion": "Boolean"}
     for nombre, p in entradas.items():
         assert bool(p.k.get("raw_link")) == (nombre in L.ENLACES), nombre
     assert entradas["plan"].k.get("force_input") is True and entradas["factor_guia"].k.get("force_input") is True
@@ -783,10 +786,182 @@ def test_nodo_devuelve_los_enlaces_y_el_subgrafo():
     sin_transicion = {k: v for k, v in PLAN_V8.items() if k != "transicion_max"}
     _falla("le falta", L.BlockingLento.execute, json.dumps(sin_transicion), A, H, *[ENLACES[k] for k in L.ENLACES])
 
+# ---- solo animacion: la etapa 1 sin render ----
+CLASES_ETAPA2 = {"LTXAddVideoICLoRAGuide"}  # la unica clase exclusiva; las demas de la etapa 2 se cuentan por ventana
+SIN_RENDER = {k: v for k, v in ENLACES.items() if k not in L.ENLACES_RENDER}
+GRAFO_SOLO, ANIMACION_SOLO, PLAYBLAST_SOLO = L.grafo_lento(PLAN_V8, SIN_RENDER, A, H, PRE, solo_animacion=True)
+# grafo_lento de v0.14 (commit 917bb3d, el desplegado), json.dumps de (grafo, animacion, playblast) con prefijo PRE
+HUELLAS_V014 = {
+    "v8": "dc04fbf653851fba9f264c876420a8ddae140b21367899cb6977d8d7542fb94e",
+    "una ventana": "99d19ec714ceb40e90d7afbcd0b01f177f663624cd4013628b0c92627afe2d51",
+    "dos ventanas": "aac979b9e03f93450bb28420d26473f458c13a9b2e893e039713f5301eb8101e",
+}
+COMMIT_V014 = "917bb3d07d81387e805d0c3dc958346e4e54c02f"
+
+
+def _planes_de_control():
+    return {"v8": PLAN_V8, "una ventana": _plan([(0, 2)], [16, 32]), "dos ventanas": _plan([(0, 3), (3, 5)], [32, 16, 16, 32, 16])}
+
+
+def _comprobar_tipos(grafo, enlaces):
+    """Lo de test_sin_guardados_... para cualquier grafo: entradas completas, tipos exactos y enlaces resueltos."""
+    de_fuera = {tuple(v): TIPO_ENLACE[k] for k, v in enlaces.items()}
+    for ident, n in grafo.items():
+        assert ident.startswith(PRE) and set(n) == {"class_type", "inputs"}, ident
+        esquema = ENTRADAS[n["class_type"]]
+        faltan = set(esquema) - set(n["inputs"]) - OPCIONALES.get(n["class_type"], set())
+        assert not faltan and set(n["inputs"]) <= set(esquema), (ident, faltan)
+        for nombre, v in n["inputs"].items():
+            tipo = esquema[nombre]
+            if isinstance(v, list):
+                assert _enlace(v), (ident, nombre, v)
+                if v[0] in grafo:
+                    salidas = SALIDAS[grafo[v[0]]["class_type"]]
+                    assert v[1] < len(salidas) and salidas[v[1]] == tipo, (ident, nombre, v)
+                else:
+                    assert de_fuera.get(tuple(v)) == tipo, (ident, nombre, v)
+            elif isinstance(tipo, list):
+                assert v in tipo, (ident, nombre, v)
+            else:
+                assert type(v) is PYTHON[tipo], (ident, nombre, v)
+
+
+def test_solo_animacion_cada_ventana_es_su_etapa1_sin_render():
+    g, ventanas, texto = GRAFO_SOLO, PLAN_V8["ventanas"], json.dumps(PLAN_V8)
+    # sin los enlaces del render da lo mismo que con ellos: no se miran
+    assert L.grafo_lento(PLAN_V8, ENLACES, A, H, PRE, solo_animacion=True) == (g, ANIMACION_SOLO, PLAYBLAST_SOLO)
+    assert ANIMACION_SOLO == [f"{PRE}w3.elegir", 0] and PLAYBLAST_SOLO == [f"{PRE}w3.elegir", 1]
+    # la etapa 1 de cada ventana, nodo a nodo, la misma que con render
+    for w, v in enumerate(ventanas):
+        s1 = f"{PRE}w{w}.s1."
+        mia = {i: n for i, n in g.items() if i.startswith(s1)}
+        assert mia == {i: n for i, n in GRAFO.items() if i.startswith(s1)}, w
+        p = v["p1"] - v["p0"] + 1
+        assert Counter(n["class_type"] for n in mia.values()) == {
+            "ImageFromBatch": p, "ImageScale": 2 * p, "LTXVAddGuide": 2 * p, "EmptyLTXVLatentVideo": 1, "KSamplerSelect": 1,
+            "ManualSigmas": 2, "CFGGuider": 2, "SamplerCustomAdvanced": 2, "LTXVCropGuides": 2, "LTXVLatentUpsampler": 1,
+            "LTXVTiledVAEDecode": 1}, w
+        # ni etapa 2 ni ancla: lo unico de la ventana fuera de la etapa 1 es su CP_LentaElegir
+        assert {i for i in g if i.startswith(f"{PRE}w{w}.")} - set(mia) == {f"{PRE}w{w}.elegir"}, w
+        esperado = {"guia": [s1 + "guia", 0], "render": [s1 + "guia", 0], "plan": texto, "ventana": w}
+        if w:
+            esperado.update(anterior_render=[f"{PRE}w{w - 1}.elegir", 0], anterior_guia=[f"{PRE}w{w - 1}.elegir", 1])
+        assert g[f"{PRE}w{w}.elegir"] == {"class_type": "CP_LentaElegir", "inputs": esperado}, w
+        assert list(g[f"{PRE}w{w}.elegir"]["inputs"])[:4] == ["guia", "render", "plan", "ventana"]  # lo acumulado, detras
+        assert g[f"{PRE}w{w}.elegir"]["inputs"]["guia"] is not g[f"{PRE}w{w}.elegir"]["inputs"]["render"]  # listas propias
+    # la paridad con el grafo validado de la etapa 1 (ventana 2, poses 13..20), con la canonizacion de siempre
+    assert _paridad_suave(g) is None
+    mio, control = _canon_suave(g), _canon_suave_control()
+    assert Counter(mio.debajo(f"{PRE}w2.s1.guia").values()) == Counter(control.debajo("89").values())
+    # cero nodos de la etapa 2 y ninguna referencia a los enlaces del render
+    assert not any(".s2." in i or i.endswith(".ancla") for i in g)
+    assert not any(n["class_type"] in CLASES_ETAPA2 for n in g.values())
+    del_render = {tuple(ENLACES[k]) for k in L.ENLACES_RENDER}
+    assert not any(_enlace(v) and tuple(v) in del_render for n in g.values() for v in n["inputs"].values())
+    assert _enlaces_de_fuera(g.values()) == set(L.ENLACES_SUAVE)
+    # 192 nodos: los 235 de siempre menos 10 de la etapa 2 por ventana y las 3 anclas
+    poses = [v["p1"] - v["p0"] + 1 for v in ventanas]
+    assert len(g) == sum(12 + 5 * p + 1 for p in poses) == 235 - 10 * 4 - 3 == 192
+    _comprobar_tipos(g, SIN_RENDER)
+    listas = [id(v) for n in g.values() for v in n["inputs"].values() if isinstance(v, list)]
+    assert len(listas) == len(set(listas))
+
+
+def test_solo_animacion_el_motor_acaba_cada_ventana_antes_de_la_siguiente():
+    orden = _orden_del_motor(GRAFO_SOLO, [ANIMACION_SOLO, PLAYBLAST_SOLO])
+    assert sorted(orden) == sorted(GRAFO_SOLO)
+    ventanas = [int(i[len(PRE) + 1:].split(".")[0]) for i in orden]
+    assert ventanas == sorted(ventanas), "se mezclan nodos de ventanas distintas"
+    esperado = []
+    for w in range(4):
+        esperado += [f"w{w}.s1.muestreo1", f"w{w}.s1.muestreo2", f"w{w}.s1.guia", f"w{w}.elegir"]
+    assert _pesados(GRAFO_SOLO, orden) == esperado
+
+
+def test_solo_animacion_una_ventana_validacion_y_enlaces():
+    g, animacion, playblast = L.grafo_lento(_plan([(0, 2)], [16, 32]), SIN_RENDER, A, H, "", solo_animacion=True)
+    assert len(g) == 12 + 5 * 3 + 1 and (animacion, playblast) == (["w0.elegir", 0], ["w0.elegir", 1])
+    assert g["w0.elegir"]["inputs"] == {"guia": ["w0.s1.guia", 0], "render": ["w0.s1.guia", 0],
+                                        "plan": json.dumps(_plan([(0, 2)], [16, 32])), "ventana": 0}
+    # los enlaces de la etapa 1 siguen siendo obligatorios; los del render pueden faltar o venir vacios
+    for nombre in L.ENLACES_SUAVE:
+        _falla(f"'{nombre}' tiene que venir conectada", L.grafo_lento, PLAN_V8,
+               {k: v for k, v in SIN_RENDER.items() if k != nombre}, A, H, PRE, True)
+    assert L.grafo_lento(PLAN_V8, dict(SIN_RENDER, arte=None, factor_guia="x"), A, H, PRE, solo_animacion=True)[0] == GRAFO_SOLO
+    # sin solo_animacion, los del render siguen haciendo falta
+    _falla("'arte' tiene que venir conectada", L.grafo_lento, PLAN_V8, SIN_RENDER, A, H, PRE)
+    for malo in (1, "true", None):
+        _falla("verdadero o falso", L.grafo_lento, PLAN_V8, ENLACES, A, H, PRE, malo)
+    # y el plan y el tamano se comprueban igual
+    _falla("multiplos de 64", L.grafo_lento, PLAN_V8, SIN_RENDER, 1900, H, PRE, True)
+    _falla("no trae ventanas", L.grafo_lento, {"ventanas": []}, SIN_RENDER, A, H, PRE, True)
+
+
+def test_sin_solo_animacion_el_grafo_es_el_de_v014():
+    """Con solo_animacion en False (o sin pasarlo) el subgrafo es el desplegado, byte a byte."""
+    for nombre, plan in _planes_de_control().items():
+        de_siempre = L.grafo_lento(plan, ENLACES, A, H, PRE)
+        assert L.grafo_lento(plan, ENLACES, A, H, PRE, solo_animacion=False) == de_siempre
+        texto = json.dumps(de_siempre)
+        assert texto == json.dumps(L.grafo_lento(plan, ENLACES, A, H, PRE, False))
+        assert hashlib.sha256(texto.encode()).hexdigest() == HUELLAS_V014[nombre], nombre
+    # y contra el codigo de v0.14, si git lo tiene a mano
+    raiz = os.path.join(os.path.dirname(__file__), "..")
+    try:
+        viejo = subprocess.run(["git", "show", f"{COMMIT_V014}:comfy_character_pipeline/lenta_grafo.py"], cwd=raiz,
+                               capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        viejo = None
+    if viejo is None or viejo.returncode:
+        print("   (sin git o sin el commit de v0.14: solo las huellas)")
+        return
+    modulo = types.ModuleType("lenta_grafo_v014")
+    exec(compile(viejo.stdout, "lenta_grafo_v014.py", "exec"), modulo.__dict__)
+    for nombre, plan in _planes_de_control().items():
+        for pre in (PRE, ""):
+            antes = modulo.grafo_lento(plan, ENLACES, A, H, pre)
+            assert json.dumps(antes) == json.dumps(L.grafo_lento(plan, ENLACES, A, H, pre)), (nombre, pre)
+            assert json.dumps(antes) == json.dumps(L.grafo_lento(plan, ENLACES, A, H, pre, solo_animacion=False)), (nombre, pre)
+
+
+def test_nodo_solo_animacion_opcional_al_final_y_apagado():
+    esquema = L.BlockingLento.define_schema()
+    entradas = esquema["inputs"]
+    assert [p.id for p in entradas] == ["plan", "ancho", "alto", *L.ENLACES, "solo_animacion"]
+    ultima = entradas[-1]
+    assert ultima.tipo == "Boolean" and ultima.k.get("optional") is True and ultima.k.get("default") is False
+    assert not ultima.k.get("raw_link") and not ultima.k.get("force_input") and len(ultima.k.get("tooltip", "")) > 40
+    # las de antes siguen obligatorias (la tarjeta publicada las envia todas)
+    assert not any(p.k.get("optional") for p in entradas[:-1])
+    assert [(p.tipo, p.k.get("display_name")) for p in esquema["outputs"]] == [("Image", "animacion"), ("Image", "playblast")]
+
+
+def test_nodo_solo_animacion_expande_sin_render():
+    # sin la clave, como la envia la tarjeta publicada: lo de siempre
+    GraphBuilder.set_default_prefix("12", 0, 0)
+    assert L.BlockingLento.execute(json.dumps(PLAN_V8), A, H, **ENLACES).expand == GRAFO
+    GraphBuilder.set_default_prefix("12", 0, 0)
+    assert L.BlockingLento.execute(json.dumps(PLAN_V8), A, H, **ENLACES, solo_animacion=False).expand == GRAFO
+    GraphBuilder.set_default_prefix("12", 0, 0)
+    salida = L.BlockingLento.execute(json.dumps(PLAN_V8), A, H, **ENLACES, solo_animacion=True)
+    assert salida.expand == GRAFO_SOLO and salida.args == (ANIMACION_SOLO, PLAYBLAST_SOLO)
+    # en posicion, tambien (el motor llama con nombres, pero por si acaso)
+    GraphBuilder.set_default_prefix("12", 0, 0)
+    assert L.BlockingLento.execute(json.dumps(PLAN_V8), A, H, *[ENLACES[k] for k in L.ENLACES], True).expand == GRAFO_SOLO
+
 
 if __name__ == "__main__":
+    import traceback
+
     pruebas = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    for t in pruebas:
-        t()
-        print("ok", t.__name__)
-    print(len(pruebas), "pruebas")
+    fallos = []
+    for t in pruebas:  # todas, aunque falle una: se ve el cuadro entero
+        try:
+            t()
+            print("ok", t.__name__)
+        except Exception:
+            fallos.append(t.__name__)
+            print("FALLO", t.__name__)
+            traceback.print_exc()
+    print(len(pruebas), "pruebas,", len(fallos), "fallos", fallos if fallos else "")
+    sys.exit(1 if fallos else 0)

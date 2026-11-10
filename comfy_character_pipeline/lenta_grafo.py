@@ -9,6 +9,8 @@ del plan de CP_LentaPlan:
   como fotograma 0. El ancla de la primera ventana es el arte; la de las siguientes, el ultimo fotograma del render de
   la ventana anterior: el personaje es el mismo de principio a fin y no hay costuras;
 - CP_LentaElegir vuelve a los tiempos del blocking y va acumulando lo elegido.
+Con solo_animacion no hay etapa 2: cada ventana es su playblast suave y CP_LentaElegir lo recibe como guia y como
+render (la animacion y el playblast salen iguales). Cuesta lo que la etapa 1, sin el render.
 
 El subgrafo es un diccionario (prompt de API): se compara nodo a nodo, sin GPU, con los grafos validados de
 tests/datos/ (tests/test_lenta_grafo.py). Lo que sale de leer el motor (ComfyUI 0.42.1):
@@ -41,6 +43,9 @@ MUESTREADOR = "euler_ancestral"
 MAX_VENTANAS = 64
 ENLACES = ("ruido", "poses", "arte", "modelo_suave", "modelo_render", "factor_guia", "vae", "escalador",
            "positivo_suave", "negativo_suave", "positivo_render", "negativo_render")
+# lo que solo usa la etapa 2: con solo_animacion no se cablea ni se pide
+ENLACES_RENDER = ("arte", "modelo_render", "factor_guia", "positivo_render", "negativo_render")
+ENLACES_SUAVE = tuple(n for n in ENLACES if n not in ENLACES_RENDER)
 
 
 def _es_enlace(v):
@@ -107,10 +112,11 @@ def comprobar_tamano(ancho, alto, nodo=NODO):
         raise ValueError(f"[{nodo}] El ancho ({ancho}) y el alto ({alto}) tienen que ser multiplos de 64 (minimo 128).")
 
 
-def comprobar_enlaces(enlaces, nodo=NODO):
-    """Copia limpia de los enlaces de entrada. Todos son enlaces [id, indice]; el factor de la guia puede ser un numero."""
+def comprobar_enlaces(enlaces, nodo=NODO, nombres=ENLACES):
+    """Copia limpia de los enlaces de entrada (los de nombres). Todos son enlaces [id, indice]; el factor de la guia
+    puede ser un numero."""
     limpio = {}
-    for nombre in ENLACES:
+    for nombre in nombres:
         v = enlaces.get(nombre) if isinstance(enlaces, dict) else None
         if _es_enlace(v):
             limpio[nombre] = [v[0], v[1]]
@@ -198,26 +204,33 @@ def _etapa_render(grafo, pre, ventana, enl, guia, ancla, ancho, alto):
     return _decodificar(grafo, pre + "render", enl, final)
 
 
-def grafo_lento(plan, enlaces, ancho, alto, prefijo):
+def grafo_lento(plan, enlaces, ancho, alto, prefijo, solo_animacion=False):
     """El subgrafo de todas las ventanas del plan, como prompt de API de ComfyUI: {id: {"class_type", "inputs"}}.
 
     plan: diccionario del plan de CP_LentaPlan. enlaces: [id, indice] de ruido, poses, arte, modelo_suave,
     modelo_render, factor_guia, vae, escalador, positivo_suave, negativo_suave, positivo_render y negativo_render.
     Los ids son prefijo + nombre legible: w2.s1.k13 es la guia de la pose 13 en el primer pase de la etapa 1 de la
-    ventana 2. Devuelve (grafo, enlace a la animacion, enlace al playblast): las dos salidas del ultimo CP_LentaElegir."""
+    ventana 2. Devuelve (grafo, enlace a la animacion, enlace al playblast): las dos salidas del ultimo CP_LentaElegir.
+    solo_animacion: sin etapa 2 ni ancla; CP_LentaElegir recibe el playblast como guia y como render, y los enlaces
+    de ENLACES_RENDER ni se usan ni hace falta que vengan. Con False el grafo es el de siempre."""
+    if not isinstance(solo_animacion, bool):
+        raise ValueError(f"[{NODO}] solo_animacion tiene que ser verdadero o falso: {solo_animacion!r}.")
     ventanas = comprobar_plan(plan)
     comprobar_tamano(ancho, alto)
-    enl = comprobar_enlaces(enlaces)
+    enl = comprobar_enlaces(enlaces, nombres=ENLACES_SUAVE if solo_animacion else ENLACES)
     texto = json.dumps(plan)
     grafo = {}
-    ancla, render, elegido = enl["arte"], None, None
+    ancla, render, elegido = enl.get("arte"), None, None
     for w, ventana in enumerate(ventanas):
         pre = f"{prefijo}w{w}."
         guia = _etapa_suave(grafo, pre + "s1.", ventana, enl, ancho, alto)
-        if w:
-            # ultimo fotograma del render anterior: ImageFromBatch lo copia, no retiene el lote entero
-            ancla = [_nodo(grafo, pre + "ancla", "ImageFromBatch", image=render, batch_index=ventanas[w - 1]["n"] - 1, length=1), 0]
-        render = _etapa_render(grafo, pre + "s2.", ventana, enl, guia, ancla, ancho, alto)
+        if solo_animacion:
+            render = guia  # la animacion es el propio playblast suave
+        else:
+            if w:
+                # ultimo fotograma del render anterior: ImageFromBatch lo copia, no retiene el lote entero
+                ancla = [_nodo(grafo, pre + "ancla", "ImageFromBatch", image=render, batch_index=ventanas[w - 1]["n"] - 1, length=1), 0]
+            render = _etapa_render(grafo, pre + "s2.", ventana, enl, guia, ancla, ancho, alto)
         entradas = {"guia": guia, "render": render, "plan": texto, "ventana": w}
         if w:
             # lo acumulado va lo ULTIMO: el orden de estas entradas decide el de ejecucion (ver la cabecera)
@@ -256,6 +269,11 @@ class BlockingLento(io.ComfyNode):
                 io.Conditioning.Input("negativo_suave", raw_link=True),
                 io.Conditioning.Input("positivo_render", raw_link=True, tooltip="Ya pasado por LTXVConditioning a 24 fps."),
                 io.Conditioning.Input("negativo_render", raw_link=True),
+                # al final y opcional: los prompts que no la traen (la tarjeta publicada) se ejecutan como siempre
+                io.Boolean.Input("solo_animacion", default=False, optional=True,
+                                 tooltip="Solo la animacion suave (etapa 1), sin render: las dos salidas son el playblast "
+                                         "en los tiempos del blocking. Arte, modelo de render, factor y textos de render "
+                                         "siguen conectados pero no se usan (sus cargadores se ejecutan igual)."),
             ],
             outputs=[
                 io.Image.Output(display_name="animacion"),
@@ -266,7 +284,7 @@ class BlockingLento(io.ComfyNode):
 
     @classmethod
     def execute(cls, plan, ancho, alto, ruido, poses, arte, modelo_suave, modelo_render, factor_guia, vae, escalador,
-                positivo_suave, negativo_suave, positivo_render, negativo_render) -> io.NodeOutput:
+                positivo_suave, negativo_suave, positivo_render, negativo_render, solo_animacion=False) -> io.NodeOutput:
         from comfy_execution.graph_utils import GraphBuilder
 
         enlaces = dict(ruido=ruido, poses=poses, arte=arte, modelo_suave=modelo_suave, modelo_render=modelo_render,
@@ -274,8 +292,9 @@ class BlockingLento(io.ComfyNode):
                        negativo_suave=negativo_suave, positivo_render=positivo_render, negativo_render=negativo_render)
         datos = leer_plan(plan)
         # el motor fija la raiz del prefijo (id de este nodo y numero de llamada) justo antes de llamar a execute
-        grafo, animacion, playblast = grafo_lento(datos, enlaces, ancho, alto, GraphBuilder.alloc_prefix())
+        grafo, animacion, playblast = grafo_lento(datos, enlaces, ancho, alto, GraphBuilder.alloc_prefix(),
+                                                  solo_animacion=bool(solo_animacion))
         ventanas = datos["ventanas"]
-        logging.info("[%s] %d ventanas, %d fotogramas lentos, %d nodos a %dx%d.", NODO, len(ventanas),
-                     sum(v["n"] for v in ventanas), len(grafo), ancho, alto)
+        logging.info("[%s] %d ventanas, %d fotogramas lentos, %d nodos a %dx%d%s.", NODO, len(ventanas),
+                     sum(v["n"] for v in ventanas), len(grafo), ancho, alto, ", solo animacion" if solo_animacion else "")
         return io.NodeOutput(animacion, playblast, expand=grafo)

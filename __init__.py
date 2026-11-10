@@ -22,6 +22,7 @@ from .comfy_character_pipeline.lora_meta import LoraTriggerReader
 from .comfy_character_pipeline.artist import QualityPreset, PipelineStatus
 from .comfy_character_pipeline.panel import ControlPanel
 from .comfy_character_pipeline.poses import PosesDetectar, PosesMontar, PosesSinEsperas
+from .comfy_character_pipeline.poses_fotos import PosesDesdeFotos
 from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGuiasPoses
 from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
 from .comfy_character_pipeline.lenta_grafo import BlockingLento
@@ -63,6 +64,7 @@ NODES = [
     PosesDetectar,
     PosesMontar,
     PosesSinEsperas,
+    PosesDesdeFotos,
     # blocking a animacion
     PosesClaves,
     PosesComponer,
