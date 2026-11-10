@@ -26,6 +26,11 @@ from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGu
 from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
 from .comfy_character_pipeline.lenta_grafo import BlockingLento
 
+from .comfy_character_pipeline.compat_av import tolerar_metadatos_de_video
+
+# Los .mov de QuickTime en espanol traen una etiqueta en Latin-1 que tumba av.open() en PyAV <= 18 (ver compat_av.py).
+tolerar_metadatos_de_video()
+
 # extension de frontend: js/control_panel.js
 WEB_DIRECTORY = "./js"
 

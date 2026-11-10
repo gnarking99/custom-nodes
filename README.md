@@ -276,3 +276,7 @@ Si alguno peta, el mensaje de ComfyUI dice exactamente qué parámetro no existe
 ## Estado
 
 Alfa. Ver [ROADMAP.md](ROADMAP.md).
+
+## Compatibilidad · vídeos con etiquetas mal codificadas (v0.14)
+
+Al cargarse, el pack hace que `av.open` lea las etiquetas de texto de un vídeo con `metadata_errors="replace"` en las versiones de PyAV que lo admiten (hasta la 18). Sin eso, un `.mov` exportado por QuickTime en un sistema en español (su pista de vídeo lleva `handler_name` con una letra acentuada en Latin-1) hace fallar `LoadVideo` con `'utf-8' codec can't decode byte 0xed in position 24`. Solo cambia cómo se leen esas etiquetas: los fotogramas, el audio, los tiempos y la escritura de vídeo no se tocan. Con PyAV 19 no hace nada. Código en `comfy_character_pipeline/compat_av.py`; pruebas en `tests/test_compat_av.py`.
