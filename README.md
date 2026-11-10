@@ -157,7 +157,7 @@ Además entiende la respuesta `no changes` del VLM: elimina la variable en vez d
 ### Blocking a animación — `Poses · Detectar`, `Poses · Guía sin esperas`, `Poses · Claves para fijar`, `Poses · Componer sobre la placa`, `LTX · Fijar poses`
 Las piezas de la tarjeta LTX25 BLOCKING A ANIMACIÓN de BITT: un blocking a saltos (poses con esperas) pasa a animación suave con LTX 2.5.
 
-**El problema:** si le das a un modelo de vídeo el blocking tal cual como guía, copia los saltos aunque el prompt pida lo contrario. Hay que quitar las esperas antes, y hacerlo bien tiene tres trampas medidas (ANI_BUFFET s097, blocking de 25 poses en 77 f):
+**El problema:** si le das a un modelo de vídeo el blocking tal cual como guía, copia los saltos aunque el prompt pida lo contrario. Hay que quitar las esperas antes, y hacerlo bien tiene tres trampas medidas (un blocking real de 25 poses en 77 f):
 
 1. **El interpolador.** FILM desgarra al personaje en los saltos grandes (brazos rotos, antenas fantasma) y el modelo copia el desgarro. RIFE 4.26 a 544 de alto lo deja limpio.
 2. **Los fps.** LTX comprime 8 fotogramas en cada paso latente: a 24 fps un giro rápido cabe entero en uno y sale emborronado. Con el guía al doble de fps y quedándose con uno de cada dos, la cara aguanta.
@@ -166,10 +166,25 @@ Las piezas de la tarjeta LTX25 BLOCKING A ANIMACIÓN de BITT: un blocking a salt
 - `Poses · Detectar` saca una imagen por pose, el mapa de tiempos y el factor de intermedios (12 reparte exacto saltos de 2, 3, 4, 6 y 12 fotogramas).
 - `Poses · Guía sin esperas` recoloca los intermedios en los tiempos del blocking: cada pose cae en su fotograma. Con `subpasos` 2 sale al doble de fps, y lo rellena a 8k+1 para LTX.
 - `Poses · Claves para fijar` elige las poses que se fijan: la primera, la última y las más cercanas a un reparto uniforme. 6 bastan; 25 no mejoran y tardan el doble.
-- `Poses · Componer sobre la placa` recorta cada pose de su telón liso (polinomio de grado 3 por canal) y la pone sobre la placa con una sombra de contacto corta. Una sombra ancha en la primera pose se quedaba pegada al suelo.
+- `Poses · Componer sobre la placa` recorta cada pose de su telón liso (polinomio de grado 3 por canal) y la pone sobre la placa con una sombra de contacto corta. Una sombra ancha en la primera pose se quedaba pegada al suelo. Con `sin_halo` (opcional, encendido por defecto) quita el reborde claro que deja el mate: en un anillo fino por fuera de la silueta, donde la compuesta sale más clara que la placa, vuelve a poner la placa. LTX copiaba ese reborde a todo el plano. Las sombras no se tocan, y los radios están medidos a 1088 de alto y se escalan con el alto real. Un grafo guardado sin esa entrada la recibe encendida.
 - `LTX · Fijar poses` llama a `LTXAddVideoICLoRAGuide` de ComfyUI-LTXVideo para cada pose, en un bucle: el número de poses no es fijo.
 
 `Poses · Montar` es de otra receta (texturas sin tocar el movimiento) y está aparcado: su montaje llegó a tardar 39 min sin diagnosticar.
+
+### Cámara lenta — `Cámara lenta · Plan`, `Cámara lenta · Elegir fotogramas`, `Cámara lenta · Blocking a animación`
+La receta que sustituye al interpolador: LTX 2.5 genera el plano **a cámara lenta** con todas las poses del blocking fijadas muy separadas en el tiempo, y después se eligen los fotogramas lentos que tocan para volver a los tiempos del blocking.
+
+**El problema:** con el guía a tiempo real, LTX emborrona los saltos rápidos e inventa gestos entre poses; con un interpolador (RIFE, FILM) delante, copia sus desgarros. A cámara lenta (16 o 32 fotogramas lentos por salto) cada fotograma sale nítido. Medido con un blocking real de 25 poses en 77 f en una auditoría a ciegas: preferida a la receta anterior en 40 fotogramas frente a 19.
+
+1. **Cuántos lentos por salto.** 32 si el salto es grande, 16 si no: con menos lentos en los saltos pequeños el modelo tiene menos tiempo para inventar y se genera un 30 % menos. El salto se mide con flujo óptico a 480 px de ancho, así el umbral vale para cualquier resolución.
+2. **Ventanas.** El render en un pase a 1920×1088 está medido hasta 177 fotogramas: el plano se parte en el mínimo de ventanas que caben y se reparten parejas. Cada ventana empieza y acaba en pose, y su ancla es el último fotograma del render de la anterior: el personaje es el mismo de principio a fin y no hay costuras.
+3. **Elegir por recorrido, no por índice.** LTX carga el movimiento hacia un lado del salto; eligiendo uno de cada N salen parones y tirones. Se acumula el flujo óptico del playblast lento y cada fotograma toma el lento más cercano a su parte del recorrido. Una espera larga del blocking sigue siendo espera: el salto ocupa como mucho los 12 últimos fotogramas.
+
+- `Cámara lenta · Plan` mide los saltos entre las poses de `Poses · Detectar` y saca el plan (JSON): lentos de cada salto, ventanas y posición de cada pose. Tiene un tope de fotogramas lentos (`max_total`, 1601 por defecto) por encima del cual pide partir el plano, y la línea `info` avisa de una ventana que no cabe.
+- `Cámara lenta · Blocking a animación` se **expande** al ejecutarse en los nodos de serie con los que se validó la receta, una vez por ventana: playblast lento en dos pases (mitad de tamaño, subida del latente ×2 y refinado), render en un pase con la IC-LoRA Layout-to-Render siguiendo ese playblast, y la elección. Los modelos, el VAE, los textos y el ruido entran como enlaces y se cablean tal cual: los cargadores y los guardados se quedan en el grafo de siempre. Saca `animacion` y `playblast` con los fotogramas del blocking. Necesita ComfyUI-LTXVideo.
+- `Cámara lenta · Elegir fotogramas` es la elección de una ventana y va dentro de la expansión; se puede usar suelto para montar el subgrafo a mano.
+
+El subgrafo es un diccionario y se compara nodo a nodo con los grafos validados (`tests/datos/`), sin GPU.
 
 ---
 
@@ -180,7 +195,7 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/gnarking99/custom-nodes.git comfyui-character-pipeline
 ```
 
-Requiere **ComfyUI ≥ 0.23** (API de nodos V3). Usa `torch`, `numpy` y `Pillow`, que ya trae ComfyUI, y `scipy` para los nodos de poses (máscaras y sombras). `LTX · Fijar poses` necesita además ComfyUI-LTXVideo.
+Requiere **ComfyUI ≥ 0.23** (API de nodos V3). Usa `torch`, `numpy` y `Pillow`, que ya trae ComfyUI, y `scipy` para los nodos de poses (máscaras y sombras). Los de cámara lenta miden el movimiento con OpenCV (`cv2`, que ya viene con la mayoría de instalaciones; si falta, el nodo lo dice). `LTX · Fijar poses` y `Cámara lenta · Blocking a animación` necesitan además ComfyUI-LTXVideo.
 
 ## Perfiles: ¿hace falta un JSON por LoRA?
 
@@ -228,9 +243,12 @@ python tests/test_gen.py
 python tests/test_wan.py
 python tests/test_blocking.py
 python tests/test_poses.py   # el montaje de Poses · Montar tarda mucho
+python tests/test_lenta.py
+python tests/test_lenta_grafo.py
+python tests/test_lenta_integracion.py
 ```
 
-Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). `test_blocking` cubre los nodos de blocking a animación con datos sintéticos (claves, composición, bucle de guías y guía al doble de fps); `test_poses`, la detección de poses, el guía sin esperas y el montaje. Úsalos antes de cada push.
+Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). `test_blocking` cubre los nodos de blocking a animación con datos sintéticos (claves, composición, quitado del reborde, bucle de guías y guía al doble de fps); `test_poses`, la detección de poses, el guía sin esperas y el montaje. `test_lenta` cubre el plan y la elección de fotogramas (reproduce exactos los 77 de la versión validada); `test_lenta_grafo` compara el subgrafo con los grafos validados de `tests/datos/`; `test_lenta_integracion` ejecuta el plan y el subgrafo entero con dobles de los nodos de LTX y comprueba modelos, guías, anclas y que la animación sale con los fotogramas del blocking. Úsalos antes de cada push.
 
 ## Generador de flujos
 

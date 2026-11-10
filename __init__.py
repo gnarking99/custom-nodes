@@ -23,6 +23,8 @@ from .comfy_character_pipeline.artist import QualityPreset, PipelineStatus
 from .comfy_character_pipeline.panel import ControlPanel
 from .comfy_character_pipeline.poses import PosesDetectar, PosesMontar, PosesSinEsperas
 from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGuiasPoses
+from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
+from .comfy_character_pipeline.lenta_grafo import BlockingLento
 
 # extension de frontend: js/control_panel.js
 WEB_DIRECTORY = "./js"
@@ -60,6 +62,10 @@ NODES = [
     PosesClaves,
     PosesComponer,
     LTXGuiasPoses,
+    # camara lenta
+    LentaPlan,
+    LentaElegir,
+    BlockingLento,
 ]
 
 
