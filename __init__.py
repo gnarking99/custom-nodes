@@ -26,6 +26,7 @@ from .comfy_character_pipeline.poses_fotos import PosesDesdeFotos
 from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGuiasPoses
 from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
 from .comfy_character_pipeline.lenta_grafo import BlockingLento
+from .comfy_character_pipeline.cadencia import Cadencia
 
 from .comfy_character_pipeline.compat_av import tolerar_metadatos_de_video
 
@@ -73,6 +74,7 @@ NODES = [
     LentaPlan,
     LentaElegir,
     BlockingLento,
+    Cadencia,
 ]
 
 

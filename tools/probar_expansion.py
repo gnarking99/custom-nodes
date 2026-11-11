@@ -9,7 +9,7 @@ registran lo que reciben:
   LTXVTiledVAEDecode;
 - las fuentes (modelos, vae, escalador, conditioning, factor, poses, arte) son nodos dobles con su etiqueta.
 Son de verdad: EmptyLTXVLatentVideo, ImageFromBatch, ImageScale, KSamplerSelect, ManualSigmas, RandomNoise,
-PrimitiveString, CP_PosesDesdeFotos, CP_LentaPlan, CP_BlockingLento y CP_LentaElegir.
+PrimitiveString, PrimitiveInt, CP_PosesDesdeFotos, CP_LentaPlan, CP_BlockingLento, CP_LentaElegir y CP_Cadencia.
 
 El decodificado doble devuelve n fotogramas pequenos con un cuadrado que se mueve (para que el flujo optico mida algo)
 y una marca exacta en el pixel de abajo a la izquierda: canal 0 = indice lento / 1000, canal 1 = codigo del nodo de
@@ -37,8 +37,18 @@ Lo que se comprueba (aserciones):
 10. la tarjeta publicada: el plano de control (25 poses, 77 fotogramas) con las entradas que envia su prompt a
    CP_LentaPlan y CP_BlockingLento (sin ritmo, mas_lentos ni solo_animacion); el plan (huella sha256 del JSON) y el
    subgrafo expandido por el motor (huella con el prefijo cambiado por '@') tienen que ser los que da la v0.14, que
-   estan en tests/datos/compat_v014.json (los genera tools/generar_compat_v014.py con una copia de la v0.14).
-Antes de nada (seccion 0) se comprueba que el pack publica sus nodos de camara lenta y de fotos con su esquema.
+   estan en tests/datos/compat_v014.json (los genera tools/generar_compat_v014.py con una copia de la v0.14);
+11. cadencia: CP_Cadencia detras de CP_BlockingLento, con la animacion redirigida a el y la cadencia en un PrimitiveInt
+   enlazado (como la tarjeta), en el camino de video y en el de fotos, con y sin solo_animacion: con 1 la animacion
+   es la de sin el nodo (el mismo tensor); con 2 y 3 cada fotograma es el que dice indices_cadencia; el playblast no
+   cambia; cambiar solo la cadencia no vuelve a ejecutar nada de antes; un plan de otro largo y una cadencia
+   enlazada fuera de rango dan su error en espanol. Ademas: la ida y vuelta 1 -> 2 -> 1 en el mismo ejecutor (con 1
+   el mismo tensor, nada pesado se vuelve a ejecutar y la animacion de la cache sigue intacta); ritmo 2 con cadencia 2
+   y 3 (transicion_max 24 del plan, sin volver a multiplicar) contra indices_cadencia y resumen_cadencia; y el mp4 de
+   CreateVideo + SaveVideo reales, que con cadencia 1 es identico byte a byte al de sin el nodo (se escribe en una
+   carpeta aparte de la de trabajo y se borra al acabar).
+Antes de nada (seccion 0) se comprueba que el pack publica sus nodos de camara lenta, de fotos y de cadencia con su
+esquema.
 
 Uso (con el Python del motor; no arranca servidor ni escribe en la carpeta del motor):
     python3 -B tools/probar_expansion.py <carpeta de ComfyUI> <carpeta de trabajo vacia o desechable>
@@ -97,14 +107,14 @@ asyncio.run(_cargar())
 print(f"motor y packs cargados en {time.time() - T0:.1f} s")
 
 M = nodes.NODE_CLASS_MAPPINGS
-for _n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir", "EmptyLTXVLatentVideo",
-           "ImageFromBatch", "ImageScale", "KSamplerSelect", "ManualSigmas", "RandomNoise", "PrimitiveString"):
+for _n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir", "CP_Cadencia", "EmptyLTXVLatentVideo",
+           "ImageFromBatch", "ImageScale", "KSamplerSelect", "ManualSigmas", "RandomNoise", "PrimitiveString", "PrimitiveInt"):
     assert _n in M, f"falta el nodo real {_n}"
 
 # ------------------------------------------------------------------------------------------------ 0: esquemas
 # lo que veria GET /object_info/<nodo> (server.py llama a GET_NODE_INFO_V1 en los nodos V3)
 print("\n== 0. el pack publica los nodos con su esquema ==")
-INFO = {n: M[n].GET_NODE_INFO_V1() for n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir")}
+INFO = {n: M[n].GET_NODE_INFO_V1() for n in ("CP_PosesDesdeFotos", "CP_LentaPlan", "CP_BlockingLento", "CP_LentaElegir", "CP_Cadencia")}
 for _n, _i in INFO.items():
     _ent = list(_i["input_order"].get("required", [])) + list(_i["input_order"].get("optional", []))
     print(f"{_n}: {len(_ent)} entradas ({len(_i['input_order'].get('optional', []))} opcionales), salidas {_i['output_name']}")
@@ -121,6 +131,16 @@ _okplan = (_lp["input_order"]["optional"] == ["ritmo", "mas_lentos"] and _lp["in
 _okbl = _bl["input_order"]["optional"] == ["solo_animacion"] and _bl["input"]["optional"]["solo_animacion"][1]["default"] is False
 print("FALLO esquemas" if not (_okfotos and _okplan and _okbl) else "ok   esquemas: 24 casillas con subida, ritmo, mas_lentos y solo_animacion opcionales")
 assert _okfotos and _okplan and _okbl, (_fo["input_order"], _lp["input_order"], _bl["input_order"])
+_ca = INFO["CP_Cadencia"]
+_cad = _ca["input"]["required"].get("cadencia", [None, {}])
+_okcad = (_ca["input_order"].get("required") == ["imagenes", "plan", "cadencia"] and not _ca["input_order"].get("optional")
+          and _ca["input"]["required"]["imagenes"][0] == "IMAGE" and _ca["input"]["required"]["plan"][0] == "STRING"
+          and _ca["input"]["required"]["plan"][1].get("forceInput") is True and _cad[0] == "INT"
+          and (_cad[1].get("default"), _cad[1].get("min"), _cad[1].get("max")) == (1, 1, 4)
+          and list(_ca["output"]) == ["IMAGE", "STRING"] and list(_ca["output_name"]) == ["imagenes", "info"]
+          and _ca["display_name"] == "Cámara lenta · Cadencia" and _ca["category"] == "character-pipeline/poses")
+print("FALLO esquema de CP_Cadencia" if not _okcad else "ok   esquema de CP_Cadencia: imagenes, plan (enlazado) y cadencia INT 1-4 por defecto 1; salidas imagenes e info")
+assert _okcad, (_ca["input_order"], _ca["input"], _ca["output"], _ca["output_name"])
 
 # ------------------------------------------------------------------------------------------------ registro y objetos
 REGISTRO = []  # (clase, id del nodo, datos) en orden de ejecucion
@@ -955,6 +975,229 @@ comprobar(prefijo10 is not None and len(ef10) == g10["nodos"] and huella10 == g1
 an10 = RECOGIDO.get("animacion")
 comprobar(an10 is not None and an10.shape[0] == CONTROL["bloques"][-1][1] + 1 and len([1 for c, _, _ in reg10 if c == "LTXAddVideoICLoRAGuide"]) > 0,
           f"la animacion tiene los {CONTROL['bloques'][-1][1] + 1} fotogramas del blocking y pasa por el render")
+
+# ================================================================================================ 11: cadencia
+print("\n== 11. cadencia (CP_Cadencia detras de CP_BlockingLento) ==")
+_mod_cad = sys.modules[M["CP_Cadencia"].__module__]  # la funcion pura del mismo pack que se esta probando
+
+
+class Doble_Info:
+    """Nodo de salida: guarda la linea info de CP_Cadencia."""
+    OUTPUT_NODE = True
+    RETURN_TYPES = ()
+    FUNCTION = "f"
+    CATEGORY = "pruebas"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"texto": ("STRING", {"forceInput": True})}}
+
+    def f(self, texto):
+        RECOGIDO["info"] = texto
+        return {}
+
+
+M["Doble_Info"] = Doble_Info
+ANTERIORES = {"25", "26", "30", "35"}  # lo unico que puede volver a ejecutarse al cambiar solo la cadencia
+
+
+def con_cadencia(p, c):
+    """Como la tarjeta: la animacion de CP_BlockingLento pasa por CP_Cadencia y la cadencia sale de un PrimitiveInt."""
+    p = json.loads(json.dumps(p))
+    p["26"] = {"class_type": "PrimitiveInt", "inputs": {"value": c}}
+    p["25"] = {"class_type": "CP_Cadencia", "inputs": {"imagenes": ["20", 0], "plan": ["3", 0], "cadencia": ["26", 0]}}
+    p["30"]["inputs"]["animacion"] = ["25", 0]
+    p["35"] = {"class_type": "Doble_Info", "inputs": {"texto": ["25", 1]}}
+    return p
+
+
+def sin_cadencia(p):
+    p = json.loads(json.dumps(p))
+    p["32"] = {"class_type": "Doble_Texto", "inputs": {"texto": ["3", 0]}}  # el plan, para la funcion pura
+    return p
+
+
+for camino in ("video", "fotos"):
+    for solo in (False, True):
+        nombre = f"{camino}, solo_animacion={solo}"
+        base_p = sin_cadencia(prompt_fotos(solo) if camino == "fotos" else prompt_raiz())
+        if camino == "video":
+            base_p["20"]["inputs"]["solo_animacion"] = solo
+        nuevo_ejecutor()
+        reg11, mens11, _ = ejecutar(base_p, f"p12_{camino}_{solo}")
+        comprobar(EJECUTOR.success, f"{nombre}: sin CP_Cadencia, execution_success")
+        an0, pl0, texto11 = RECOGIDO.get("animacion"), RECOGIDO.get("playblast"), RECOGIDO.get("plan")
+        if an0 is None or texto11 is None:
+            comprobar(False, f"{nombre}: falta la animacion o el plan de la pasada sin CP_Cadencia")
+            continue
+        plan11 = json.loads(texto11)
+        ini11, total11, tm11 = plan11["inicios"], plan11["total"], plan11["transicion_max"]
+        comprobar(an0.shape[0] == total11, f"{nombre}: sin CP_Cadencia salen {total11} fotogramas ({an0.shape[0]})")
+        marcas0 = [_marca(an0, f) for f in range(an0.shape[0])]
+        copia0 = an0.clone()
+        for c in (1, 2, 3):
+            pc = con_cadencia(base_p, c)
+            regc, mensc, validoc = ejecutar(pc, f"p12_{camino}_{solo}_c{c}")
+            comprobar(EJECUTOR.success, f"{nombre}, cadencia {c}: execution_success "
+                      + str([(e, d.get('exception_message', '')[:200]) for e, d in mensc if e.startswith('execution_e')]))
+            anc, plc, infoc = RECOGIDO.get("animacion"), RECOGIDO.get("playblast"), RECOGIDO.get("info")
+            if anc is None:
+                continue
+            idx = _mod_cad.indices_cadencia(ini11, total11, tm11, c)
+            if c > 1:
+                comprobar(idx != list(range(total11)), f"{nombre}, cadencia {c}: la regla cambia algo en este plan")
+            if c == 1:
+                comprobar(anc is an0 and torch.equal(anc, an0),
+                          f"{nombre}, cadencia 1: la animacion es la de sin el nodo (el mismo tensor, sin copia)")
+            else:
+                comprobar(tuple(anc.shape) == tuple(an0.shape) and torch.equal(anc, an0[idx]),
+                          f"{nombre}, cadencia {c}: cada fotograma es el que dice indices_cadencia "
+                          f"({len(set(idx))} fotogramas de entrada distintos en {total11})")
+                comprobar([_marca(anc, f) for f in range(anc.shape[0])] == [marcas0[i] for i in idx],
+                          f"{nombre}, cadencia {c}: las marcas (ventana, indice lento) son las de esos fotogramas")
+            comprobar(plc is not None and torch.equal(plc, pl0), f"{nombre}, cadencia {c}: el playblast no cambia")
+            comprobar(torch.equal(an0, copia0), f"{nombre}, cadencia {c}: la animacion de CP_BlockingLento (de la cache) sigue intacta")
+            comprobar(infoc == _mod_cad.resumen_cadencia(ini11, total11, tm11, c), f"{nombre}, cadencia {c}: info = {infoc!r}")
+            corridos = set(ejecutados(mensc))
+            comprobar(corridos <= ANTERIORES and not any(cl in DOBLES and cl != "Doble_Recoger" for cl, _, _ in regc),
+                      f"{nombre}, cadencia {c}: solo se ejecutan el primitivo, CP_Cadencia y lo de detras ({sorted(corridos)})")
+            comprobar("25" in corridos, f"{nombre}, cadencia {c}: CP_Cadencia se ejecuta")
+
+# errores: un plan de otro largo (otro CP_LentaPlan con un mapa mas largo) y una cadencia enlazada fuera de rango
+nuevo_ejecutor()
+p_err = con_cadencia(prompt_raiz(), 2)
+_mapa_largo = {"bloques": MAPA["bloques"][:-1] + [[MAPA["bloques"][-1][0], MAPA["bloques"][-1][1] + 4]]}
+p_err["2c"] = {"class_type": "PrimitiveString", "inputs": {"value": json.dumps(_mapa_largo)}}
+p_err["3c"] = json.loads(json.dumps(p_err["3"]))
+p_err["3c"]["inputs"]["mapa"] = ["2c", 0]
+p_err["25"]["inputs"]["plan"] = ["3c", 0]
+_largo, _corto = _mapa_largo["bloques"][-1][1] + 1, MAPA["bloques"][-1][1] + 1
+for nombre, prompt, trozos in (
+        ("plan de otro largo", p_err, (f"[CP_Cadencia] El plan es de {_largo} fotogramas y llegaron {_corto}", "CP_BlockingLento")),
+        ("cadencia enlazada 5", con_cadencia(prompt_raiz(), 5), ("[CP_Cadencia] La cadencia tiene que ser un entero de 1 a 4", "5")),
+        ("cadencia enlazada 0", con_cadencia(prompt_raiz(), 0), ("[CP_Cadencia] La cadencia tiene que ser un entero de 1 a 4", "0"))):
+    regx, mensx, _ = ejecutar(prompt, "p13_" + nombre.replace(" ", "_"))
+    err = next((d for e, d in mensx if e == "execution_error"), None)
+    msg = (err or {}).get("exception_message", "")
+    comprobar(not EJECUTOR.success and err is not None and err["node_id"] == "25" and all(t in msg for t in trozos),
+              f"{nombre}: execution_error en el nodo {err and err['node_id']} ({err and err['node_type']}): {msg.strip()}")
+
+
+
+def _solo_lo_de_detras(reg, mens):
+    """Al cambiar solo la cadencia: se ejecutan el primitivo, CP_Cadencia y lo de detras, y ningun doble pesado."""
+    corridos = set(ejecutados(mens))
+    return corridos <= ANTERIORES and not any(cl in DOBLES and cl != "Doble_Recoger" for cl, _, _ in reg), sorted(corridos)
+
+
+# ida y vuelta 1 -> 2 -> 1 en el mismo ejecutor: con 1 vuelve el mismo tensor y lo de antes no se toca
+for camino in ("video", "fotos"):
+    base_p = sin_cadencia(prompt_fotos(False) if camino == "fotos" else prompt_raiz())
+    nuevo_ejecutor()
+    ejecutar(base_p, f"p14_{camino}_sin")
+    an0, pl0, texto14 = RECOGIDO.get("animacion"), RECOGIDO.get("playblast"), RECOGIDO.get("plan")
+    if not EJECUTOR.success or an0 is None or texto14 is None:
+        comprobar(False, f"ida y vuelta, {camino}: falla la pasada sin CP_Cadencia")
+        continue
+    plan14 = json.loads(texto14)
+    copia0, ptr0 = an0.clone(), an0.untyped_storage().data_ptr()
+    for paso, c in enumerate((1, 2, 1)):
+        regc, mensc, _ = ejecutar(con_cadencia(base_p, c), f"p14_{camino}_{paso}_c{c}")
+        anc = RECOGIDO.get("animacion")
+        idx = _mod_cad.indices_cadencia(plan14["inicios"], plan14["total"], plan14["transicion_max"], c)
+        if c == 1:
+            ok = EJECUTOR.success and anc is an0
+            texto = "el mismo tensor que sin el nodo"
+        else:
+            ok = EJECUTOR.success and anc is not None and anc is not an0 and torch.equal(anc, an0[idx])
+            texto = "cada fotograma es el que dice indices_cadencia"
+        comprobar(ok, f"ida y vuelta 1-2-1, {camino}, paso {paso + 1} (cadencia {c}): {texto}")
+        solo, corridos = _solo_lo_de_detras(regc, mensc)
+        comprobar(solo, f"ida y vuelta 1-2-1, {camino}, paso {paso + 1} (cadencia {c}): no se vuelve a ejecutar nada pesado ({corridos})")
+        comprobar(torch.equal(an0, copia0) and an0.untyped_storage().data_ptr() == ptr0,
+                  f"ida y vuelta 1-2-1, {camino}, paso {paso + 1}: la animacion de CP_BlockingLento (de la cache) sigue intacta")
+        comprobar(torch.equal(RECOGIDO.get("playblast"), pl0), f"ida y vuelta 1-2-1, {camino}, paso {paso + 1}: el playblast no cambia")
+
+# ritmo 2 (camino de video): el plan trae transicion_max 24 en fotogramas de salida y la cadencia lo usa tal cual.
+# Un salto de 13 (26 de salida) y otro de 20 (40): con el transicion_max multiplicado otra vez (48), a treses los
+# bloques del de 26 empezarian en la pose y no tras la espera, y la animacion seria otra. En los saltos cuya espera es
+# multiplo de los bloques el cambio caeria dentro de la espera quieta (fotogramas iguales) y no se veria.
+MAPA_RITMO = {"bloques": [[0, 3], [4, 7], [8, 20], [21, 40], [41, 44], [45, 52]]}
+nuevo_ejecutor()
+base_r = sin_cadencia(prompt_raiz(mapa=MAPA_RITMO))
+base_r["3"]["inputs"]["ritmo"] = 2
+ejecutar(base_r, "p15_ritmo2_sin")
+an_r, texto_r = RECOGIDO.get("animacion"), RECOGIDO.get("plan")
+plan_r = json.loads(texto_r) if texto_r else {}
+ini_r, total_r, tm_r = plan_r.get("inicios", []), plan_r.get("total"), plan_r.get("transicion_max")
+comprobar(EJECUTOR.success and an_r is not None and plan_r.get("ritmo") == 2 and tm_r == 24 and an_r.shape[0] == total_r
+          and any(b - a > tm_r for a, b in zip(ini_r, ini_r[1:])),
+          f"ritmo 2 sin CP_Cadencia: {total_r} fotogramas, transicion_max {tm_r} y algun salto mas largo ({ini_r})")
+if an_r is not None and tm_r:
+    for c in (2, 3):
+        regc, mensc, _ = ejecutar(con_cadencia(base_r, c), f"p15_ritmo2_c{c}")
+        anc, infoc = RECOGIDO.get("animacion"), RECOGIDO.get("info")
+        idx = _mod_cad.indices_cadencia(ini_r, total_r, tm_r, c)
+        comprobar(EJECUTOR.success and anc is not None and tuple(anc.shape) == tuple(an_r.shape) and torch.equal(anc, an_r[idx]),
+                  f"ritmo 2, cadencia {c}: cada fotograma es el que dice indices_cadencia con el transicion_max del plan "
+                  f"({len(set(idx))} distintos en {total_r})")
+        if c == 3:  # a doses, con ritmo 2, los bloques mal puestos caen dentro de la espera y no cambian la imagen
+            otra = an_r[_mod_cad.indices_cadencia(ini_r, total_r, tm_r * 2, c)]
+            comprobar(not torch.equal(otra, an_r[idx]),
+                      f"ritmo 2, cadencia {c}: con el transicion_max multiplicado otra vez la animacion seria otra (esta prueba lo ve)")
+        comprobar(infoc == _mod_cad.resumen_cadencia(ini_r, total_r, tm_r, c), f"ritmo 2, cadencia {c}: info = {infoc!r}")
+        solo, corridos = _solo_lo_de_detras(regc, mensc)
+        comprobar(solo, f"ritmo 2, cadencia {c}: no se vuelve a ejecutar nada pesado ({corridos})")
+
+# el mp4 guardado con CreateVideo + SaveVideo reales: con cadencia 1, identico byte a byte al de sin el nodo
+_salida_previa = folder_paths.get_output_directory()
+_salida_mp4 = os.path.join(TRABAJO, "salida_cadencia")
+os.makedirs(_salida_mp4, exist_ok=True)
+_metadatos_previo = args.disable_metadata
+
+
+def con_guardado(p, origen, prefijo):
+    p = json.loads(json.dumps(p))
+    p["40"] = {"class_type": "CreateVideo", "inputs": {"images": origen, "fps": 24.0, "bit_depth": 8, "color_space": "sRGB",
+                                                       "codec": "none"}}
+    p["41"] = {"class_type": "SaveVideo", "inputs": {"video": ["40", 0], "filename_prefix": prefijo, "format": "mp4",
+                                                     "format.codec": "h264", "format.codec.encoding": "re-encode",
+                                                     "format.codec.encoding.crf": 16, "codec": "auto"}}
+    return p
+
+
+def _huella_mp4(prefijo):
+    fs = sorted(f for f in os.listdir(_salida_mp4) if f.startswith(prefijo) and f.endswith(".mp4"))
+    if len(fs) != 1:
+        return None
+    with open(os.path.join(_salida_mp4, fs[0]), "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+try:
+    folder_paths.set_output_directory(_salida_mp4)
+    args.disable_metadata = True  # sin el prompt dentro del mp4: los dos prompts son distintos a proposito
+    nuevo_ejecutor()
+    base_v = prompt_raiz()
+    for prefijo, prompt in (("sin", con_guardado(base_v, ["20", 0], "sin")),
+                            ("c1", con_guardado(con_cadencia(base_v, 1), ["25", 0], "c1")),
+                            ("c2", con_guardado(con_cadencia(base_v, 2), ["25", 0], "c2"))):
+        _, mensv, _ = ejecutar(prompt, f"p16_{prefijo}")
+        comprobar(EJECUTOR.success, f"mp4 {prefijo}: CreateVideo y SaveVideo se ejecutan "
+                  + str([(e, d.get('exception_message', '')[:200]) for e, d in mensv if e.startswith('execution_e')]))
+    nuevo_ejecutor()  # cadencia 1 otra vez, con la cache fria
+    ejecutar(con_guardado(con_cadencia(base_v, 1), ["25", 0], "frio"), "p16_frio")
+    huellas = {k: _huella_mp4(k) for k in ("sin", "c1", "c2", "frio")}
+    comprobar(huellas["sin"] is not None and huellas["c1"] == huellas["sin"] and huellas["frio"] == huellas["sin"],
+              f"mp4 con cadencia 1 identico byte a byte al de sin el nodo, tambien con la cache fria ({str(huellas['sin'])[:12]})")
+    comprobar(huellas["c2"] is not None and huellas["c2"] != huellas["sin"], "mp4 con cadencia 2 distinto (la comparacion ve el cambio)")
+finally:
+    args.disable_metadata = _metadatos_previo
+    folder_paths.set_output_directory(_salida_previa)
+    for r, _, fs in os.walk(_salida_mp4, topdown=False):
+        for f in fs:
+            os.remove(os.path.join(r, f))
+        os.rmdir(r)
 
 # ------------------------------------------------------------------------------------------------ cierre
 fuera = [os.path.join(r, f) for r, _, fs in os.walk(folder_paths.get_output_directory()) for f in fs]
