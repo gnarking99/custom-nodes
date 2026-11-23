@@ -27,6 +27,7 @@ from .comfy_character_pipeline.blocking import PosesClaves, PosesComponer, LTXGu
 from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
 from .comfy_character_pipeline.lenta_grafo import BlockingLento
 from .comfy_character_pipeline.cadencia import Cadencia
+from .comfy_character_pipeline.suplente_h3_image import SuplenteMiniMaxH3ImageConditioning
 
 from .comfy_character_pipeline.compat_av import tolerar_metadatos_de_video
 
@@ -75,6 +76,8 @@ NODES = [
     LentaElegir,
     BlockingLento,
     Cadencia,
+    # suplente de un nodo del nucleo (solo cuenta en motores anteriores a ComfyUI 0.45; ver suplente_h3_image.py)
+    SuplenteMiniMaxH3ImageConditioning,
 ]
 
 
