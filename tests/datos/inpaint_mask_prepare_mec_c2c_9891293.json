@@ -1,0 +1,135 @@
+{
+  "_origen": "Code2Collapse/ComfyUI-CustomNodePacks, commit 9891293eddddee24d2eb0b8fbbf0618f22fd2257, nodes/inpaint_suite.py (Apache-2.0). Esquema sacado del codigo con ast, en la forma de /object_info.",
+  "name": "InpaintMaskPrepareMEC",
+  "display_name": "Inpaint Mask Prepare",
+  "category": "C2C/Inpaint",
+  "description": "Clean, grow, and prepare dual masks: inpaint_mask for model + stitch_blend_mask for composite.",
+  "input": {
+    "required": {
+      "mask": [
+        "MASK",
+        {
+          "tooltip": "Raw input mask (B,H,W)"
+        }
+      ],
+      "fill_holes": [
+        "BOOLEAN",
+        {
+          "default": true,
+          "tooltip": "Fill interior holes in the mask"
+        }
+      ],
+      "remove_small_regions": [
+        "BOOLEAN",
+        {
+          "default": true,
+          "tooltip": "Remove small disconnected blobs"
+        }
+      ],
+      "min_region_area": [
+        "INT",
+        {
+          "default": 100,
+          "min": 0,
+          "max": 100000,
+          "step": 10,
+          "tooltip": "Minimum region area in pixels to keep"
+        }
+      ],
+      "grow_pixels": [
+        "INT",
+        {
+          "default": 4,
+          "min": 0,
+          "max": 256,
+          "step": 1,
+          "tooltip": "Dilate mask by this many pixels"
+        }
+      ],
+      "inpaint_edge_mode": [
+        [
+          "hard_binary",
+          "slight_feather"
+        ],
+        {
+          "default": "hard_binary",
+          "tooltip": "Edge style for inpaint mask: hard_binary or slight_feather"
+        }
+      ],
+      "stitch_edge_mode": [
+        [
+          "gaussian",
+          "edge_aware"
+        ],
+        {
+          "default": "gaussian",
+          "tooltip": "Edge style for stitch blend mask: gaussian or edge_aware"
+        }
+      ],
+      "stitch_feather_radius": [
+        "INT",
+        {
+          "default": 16,
+          "min": 1,
+          "max": 128,
+          "step": 1,
+          "tooltip": "Feather radius for the stitch blend mask"
+        }
+      ],
+      "temporal_smooth": [
+        "BOOLEAN",
+        {
+          "default": false,
+          "tooltip": "Apply Gaussian temporal smoothing along batch dimension (for video)"
+        }
+      ],
+      "temporal_sigma": [
+        "FLOAT",
+        {
+          "default": 1.5,
+          "min": 0.1,
+          "max": 10.0,
+          "step": 0.1,
+          "tooltip": "Temporal Gaussian sigma in frames"
+        }
+      ]
+    },
+    "optional": {
+      "reference_image": [
+        "IMAGE",
+        {
+          "tooltip": "Reference image for edge-aware stitch blend mask (required for edge_aware mode)"
+        }
+      ]
+    }
+  },
+  "input_order": {
+    "required": [
+      "mask",
+      "fill_holes",
+      "remove_small_regions",
+      "min_region_area",
+      "grow_pixels",
+      "inpaint_edge_mode",
+      "stitch_edge_mode",
+      "stitch_feather_radius",
+      "temporal_smooth",
+      "temporal_sigma"
+    ],
+    "optional": [
+      "reference_image"
+    ]
+  },
+  "output": [
+    "MASK",
+    "MASK",
+    "IMAGE",
+    "STRING"
+  ],
+  "output_name": [
+    "inpaint_mask",
+    "stitch_blend_mask",
+    "debug_preview",
+    "info"
+  ]
+}

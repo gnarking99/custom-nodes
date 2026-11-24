@@ -28,6 +28,7 @@ from .comfy_character_pipeline.lenta import LentaPlan, LentaElegir
 from .comfy_character_pipeline.lenta_grafo import BlockingLento
 from .comfy_character_pipeline.cadencia import Cadencia
 from .comfy_character_pipeline.suplente_h3_image import SuplenteMiniMaxH3ImageConditioning
+from .comfy_character_pipeline.suplente_mask_prepare import SuplenteInpaintMaskPrepareMEC
 
 from .comfy_character_pipeline.compat_av import tolerar_metadatos_de_video
 
@@ -78,6 +79,8 @@ NODES = [
     Cadencia,
     # suplente de un nodo del nucleo (solo cuenta en motores anteriores a ComfyUI 0.45; ver suplente_h3_image.py)
     SuplenteMiniMaxH3ImageConditioning,
+    # suplente de un nodo de un pack que ya no se instala (lo usa la tarjeta enhance lora propio v9; ver suplente_mask_prepare.py)
+    SuplenteInpaintMaskPrepareMEC,
 ]
 
 

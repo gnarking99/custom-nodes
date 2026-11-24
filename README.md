@@ -254,6 +254,7 @@ python tests/test_lenta_fotos_integracion.py
 python tests/test_poses_fotos.py
 python tests/test_compat_av.py
 python tests/test_suplente_h3_image.py
+python tests/test_suplente_mask_prepare.py   # necesita torch, numpy y scipy u opencv
 ```
 
 Y dentro del motor real (sin GPU ni modelos, con dobles de los nodos pesados; no arranca servidor ni escribe en la carpeta del motor):
@@ -261,6 +262,7 @@ Y dentro del motor real (sin GPU ni modelos, con dobles de los nodos pesados; no
 ```bash
 <python de ComfyUI> -B tools/probar_expansion.py <carpeta de ComfyUI> <carpeta de trabajo desechable>
 <python de ComfyUI> -I tools/comprobar_suplente_h3_image.py <carpeta de ComfyUI>   # con la 0.42.1 y con la 0.45.6
+<python de ComfyUI> -I tools/comprobar_suplente_mask_prepare.py <carpeta de ComfyUI>   # con la 0.42.1 y con la 0.45.6
 ```
 
 Prueban la lógica pura **sin necesitar ComfyUI** (stubbean `comfy_api`). `test_logic` cubre `PromptTemplate`, `VideoChunk` y `SnapResolution`; `test_res` cubre `LTXResolution`; `test_gen` cubre `LTXGenPlan` y `LTXSigmas` (27 comprobaciones); `test_wan` cubre `WanGenPlan` y `WanSplit` (32: troceado en tandas, avance del solape, corte por sigma y cómo lo mueve el shift). `test_blocking` cubre los nodos de blocking a animación con datos sintéticos (claves, composición, quitado del reborde, bucle de guías y guía al doble de fps); `test_poses`, la detección de poses, el guía sin esperas y el montaje. `test_lenta` cubre el plan y la elección de fotogramas (reproduce exactos los 77 de la versión validada); `test_lenta_grafo` compara el subgrafo con los grafos validados de `tests/datos/`; `test_lenta_integracion` ejecuta el plan y el subgrafo entero con dobles de los nodos de LTX y comprueba modelos, guías, anclas y que la animación sale con los fotogramas del blocking. `test_lenta_compat_v014` comprueba que, sin `ritmo` ni `mas_lentos`, `Cámara lenta · Plan` da el mismo plan byte a byte (o el mismo error con el mismo texto) que la v0.14 en los 314 casos de `tests/datos/compat_v014.json`, y que el plano de control con las entradas de la tarjeta publicada da el plan y el subgrafo de la v0.14; ese fichero lo genera `tools/generar_compat_v014.py` con una copia de la v0.14 (`git archive 917bb3d`, ver su cabecera). `test_poses_fotos` cubre `Poses · Desde fotos` (casillas, orden, tamaños, alfa, EXIF, errores, avisos) y `test_lenta_fotos_integracion` hace la cadena entera desde fotos, con `mas_lentos` como la tarjeta: fotos → plan → subgrafo con y sin `solo_animacion` → fotogramas de salida, cada pose en su fotograma. `test_lenta_compat_v015` compara planes, índices elegidos y subgrafo (con y sin `solo_animacion`) con los de la v0.15. `test_cadencia` cubre `Cámara lenta · Cadencia`: la regla frente a una implementación de referencia escrita fotograma a fotograma en miles de planes al azar (ritmo 1 a 8, `mas_lentos`, mapas de vídeo y de fotos, cadencias 1 a 4), sus propiedades, el plano de control (a doses 38 dibujos, a treses 25), que con cadencia 1 devuelve el mismo tensor, que no toca la entrada, el nodo con un plan de `ritmo` 3 y con otro de fotos de 20 fotogramas por pose (usa el `transicion_max` del plan, sin volver a multiplicarlo), el rechazo de tiempos que no son enteros y los errores. `tools/probar_expansion.py` repite lo mismo dentro del motor real, con y sin `solo_animacion`, con fotos y con `ritmo` 2, ejecuta el plano de control con las entradas de la tarjeta publicada (plan y subgrafo de la v0.14) y pone `Cámara lenta · Cadencia` detrás de `Cámara lenta · Blocking a animación` en los caminos de vídeo y de fotos, con `ritmo` 2, en una ida y vuelta 1 → 2 → 1 con el mismo ejecutor y hasta el mp4 de `CreateVideo` y `SaveVideo` reales (con cadencia 1, idéntico byte a byte al de sin el nodo). Úsalos antes de cada push.
@@ -332,3 +334,18 @@ La tarjeta MINIMAX H3 IMAGE usa `MiniMaxH3ImageConditioning`, un nodo del núcle
 - Cuando todos los puestos tengan un motor 0.45 o posterior, se puede quitar.
 
 `tests/test_suplente_h3_image.py` compara su esquema con el del núcleo guardado de la nube (`tests/datos/minimax_h3_image_conditioning_v0456.json`, el `/object_info` de la v0.45.6) y comprueba que no se ejecuta. `tools/comprobar_suplente_h3_image.py <carpeta de ComfyUI>` lo comprueba dentro de un ComfyUI real: con la 0.42.1 tiene que ganar el suplente, con la 0.45.6 el núcleo, en los dos con el mismo esquema que la nube y los 29 `CP_` cargados.
+
+## Suplente de InpaintMaskPrepareMEC (v0.18)
+
+Un nodo nuevo y nada más: **ningún nodo existente cambia**.
+
+La tarjeta ENHANCE IMAGEN / enhance lora propio v9 limpia la máscara de SAM con `InpaintMaskPrepareMEC` (nodo 34, y el 54 de ELEGIR PINTANDO): quita las islas sueltas de menos de 20 000 px. Ese nodo era del pack `Code2Collapse/ComfyUI-CustomNodePacks`, que salió de `nodes_config.json` el 28-10-2026 porque ninguna tarjeta del repositorio lo usaba. Esta tarjeta solo vive en R2 y nadie la contó: desde ese día fallaba siempre, en la nube y en los puestos, con el nodo sin instalar.
+
+`comfy_character_pipeline/suplente_mask_prepare.py` registra un nodo con **el mismo nombre y el mismo esquema** (las diez entradas en su orden, con sus rangos y opciones, `reference_image` opcional y las salidas `inpaint_mask`, `stitch_blend_mask`, `debug_preview` e `info`). La tarjeta publicada y la pantalla Enhance de la app, que exige que el nodo 34 sea de ese tipo, siguen valiendo sin tocarlas. A diferencia del suplente de MiniMax H3 Image, este **sí se ejecuta**: la lógica está escrita aquí.
+
+- Hace lo mismo que el original en todo lo que usa la tarjeta y en el resto de opciones: rellenar huecos, quitar piezas sueltas por área (vecindad de 8; la que mide justo el mínimo se queda), engordar, los dos bordes de la máscara de inpaint, la máscara de mezcla gaussiana (sigma = radio × 0,4) y el suavizado entre fotogramas.
+- **No hace** el modo `edge_aware` con `reference_image` conectada: falla con un mensaje claro en vez de dar otra cosa en silencio. Sin imagen, el original ya usaba `gaussian`, y este también.
+- Separa las piezas con scipy, que viene con ComfyUI, y si faltara, con OpenCV. No añade dependencias.
+- Si el pack original se instalara a la vez, los dos registrarían el mismo nombre y ganaría el último en cargar. En BITT no está.
+
+`tests/test_suplente_mask_prepare.py` compara el esquema con el del original (`tests/datos/inpaint_mask_prepare_mec_c2c_9891293.json`, sacado de su código con `ast`, sin ejecutarlo), y cada opción con una copia de su algoritmo de OpenCV y con una implementación ingenua píxel a píxel, en máscaras al azar. `tools/comprobar_suplente_mask_prepare.py <carpeta de ComfyUI>` lo comprueba dentro de un ComfyUI real (0.42.1 y 0.45.6): lo da este pack, el esquema es el del original, se ejecuta con los valores de la tarjeta y los 29 `CP_` cargan igual.
